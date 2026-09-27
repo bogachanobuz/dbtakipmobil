@@ -1,3 +1,4 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -29,5 +30,21 @@ void main() {
     await tester.pump(const Duration(milliseconds: 400));
     expect(find.text('Tekrar hoş geldin.'), findsOneWidget);
     expect(find.text('GİRİŞ YAP'), findsOneWidget);
+  });
+
+  testWidgets('demo account opens the day quests', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    await tester.pumpWidget(const DbTakipApp(showWelcome: false));
+
+    await tester.enterText(find.byType(TextField).at(0), 'demo');
+    await tester.enterText(find.byType(TextField).at(1), 'demo123');
+    await tester.tap(find.text('GİRİŞ YAP'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Pzt'), findsOneWidget);
+    await tester.tap(find.text('Pzt'));
+    await tester.pumpAndSettle();
+    expect(find.text('Matematik'), findsOneWidget);
+    expect(find.text('Fonksiyonlar'), findsOneWidget);
   });
 }

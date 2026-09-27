@@ -25,21 +25,9 @@ abstract final class DbText {
       fontFamily: 'Nunito',
       fontSize: size,
       fontWeight: weight,
-      fontVariations: [FontVariation('wght', _axis(weight))],
       color: color,
       height: height,
       letterSpacing: letterSpacing,
     );
-  }
-
-  static double _axis(FontWeight weight) {
-    return switch (weight) {
-      FontWeight.w400 => 400,
-      FontWeight.w500 => 500,
-      FontWeight.w600 => 600,
-      FontWeight.w800 => 800,
-      FontWeight.w900 => 900,
-      _ => 700,
-    };
   }
 }

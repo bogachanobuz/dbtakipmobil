@@ -1,5 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../data/site_session.dart';
+import '../../demo/demo_account.dart';
+import '../../screens/program/program_screen.dart';
 import '../../theme/db_theme.dart';
 import '../../widgets/db_logo.dart';
 import '../../widgets/lip_button.dart';
@@ -15,6 +19,7 @@ class _LoginScreenState extends State<LoginScreen> {
   final _email = TextEditingController();
   final _password = TextEditingController();
   bool _obscure = true;
+  bool _busy = false;
   String? _error;
 
   @override
@@ -24,27 +29,53 @@ class _LoginScreenState extends State<LoginScreen> {
     super.dispose();
   }
 
-  void _submit() {
+  Future<void> _submit() async {
     final email = _email.text.trim();
     final password = _password.text;
+    if (_busy) return;
     if (email.isEmpty || password.isEmpty) {
       setState(() => _error = 'E-posta ve şifre gerekli.');
       return;
     }
-    setState(() => _error = null);
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        behavior: SnackBarBehavior.floating,
-        content: Text(
-          'Giriş, sitenin öğrenci hesabına bağlanınca açılacak.',
-          style: DbText.style(
-            size: 14,
-            weight: FontWeight.w700,
-            color: Colors.white,
-          ),
-        ),
-      ),
-    );
+    final prefs = await SharedPreferences.getInstance();
+    if (DemoAccount.matches(email, password)) {
+      await SiteSession.instance.clear();
+      await prefs.setBool(DemoAccount.sessionKey, true);
+      await prefs.setBool(SiteSession.liveKey, false);
+      if (!mounted) return;
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute<void>(builder: (_) => const ProgramScreen()),
+      );
+      return;
+    }
+
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final error = await SiteSession.instance.login(email, password);
+      if (!mounted) return;
+      if (error != null) {
+        setState(() {
+          _busy = false;
+          _error = error;
+        });
+        return;
+      }
+      await prefs.setBool(DemoAccount.sessionKey, true);
+      await prefs.setBool(SiteSession.liveKey, true);
+      if (!mounted) return;
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute<void>(builder: (_) => const ProgramScreen(live: true)),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = 'Siteye bağlanılamadı.';
+      });
+    }
   }
 
   @override
@@ -112,18 +143,17 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
               ],
               const SizedBox(height: 22),
-              LipButton(label: 'GİRİŞ YAP', onPressed: _submit),
+              LipButton(label: _busy ? 'GİRİLİYOR' : 'GİRİŞ YAP', onPressed: _submit),
               const SizedBox(height: 8),
-              TextButton(
-                onPressed: () {},
-                child: Text(
-                  'ŞİFREMİ UNUTTUM',
-                  style: DbText.style(
-                    size: 14,
-                    weight: FontWeight.w900,
-                    color: DbColors.navy,
-                    letterSpacing: 0.6,
-                  ),
+              const SizedBox(height: 12),
+              Text(
+                'Demo hesap\n${DemoAccount.username}  ·  ${DemoAccount.password}\nSite hesabın da aynı alandan girer.',
+                textAlign: TextAlign.center,
+                style: DbText.style(
+                  size: 14,
+                  weight: FontWeight.w700,
+                  color: DbColors.muted,
+                  height: 1.4,
                 ),
               ),
             ],
