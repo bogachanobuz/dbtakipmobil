@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
@@ -60,12 +61,16 @@ class _ErrorSketchPageState extends State<ErrorSketchPage> {
   _PlacedPhoto? _selected;
   var _saving = false;
   var _loadingSaved = false;
+  var _closing = false;
+  var _canLeave = false;
+  String? _serverPath;
   Size _board = Size.zero;
 
   @override
   void initState() {
     super.initState();
-    _loadSaved();
+    _serverPath = widget.sketchPath;
+    _restore();
   }
 
   @override
@@ -78,6 +83,117 @@ class _ErrorSketchPageState extends State<ErrorSketchPage> {
   }
 
   bool get _hasMarks => _strokes.isNotEmpty || _photos.isNotEmpty || _saved != null;
+
+  Future<Directory> _folder() async {
+    final base = await getApplicationDocumentsDirectory();
+    final folder = Directory('${base.path}/sketch_${widget.questionId}');
+    if (!folder.existsSync()) folder.createSync(recursive: true);
+    return folder;
+  }
+
+  Future<void> _restore() async {
+    final folder = await _folder();
+    final cleared = File('${folder.path}/cleared').existsSync();
+    final file = File('${folder.path}/board.json');
+    if (file.existsSync()) {
+      try {
+        final raw = jsonDecode(await file.readAsString());
+        if (raw is Map) {
+          final strokes = <_Stroke>[];
+          final rows = raw['strokes'];
+          if (rows is List) {
+            for (final row in rows) {
+              if (row is! Map) continue;
+              final stroke = _Stroke(
+                color: Color((row['c'] as num?)?.toInt() ?? 0xFF111827),
+                width: (row['w'] as num?)?.toDouble() ?? 3,
+                erase: row['e'] == true,
+              );
+              final points = row['p'];
+              if (points is List) {
+                for (final point in points) {
+                  if (point is List && point.length >= 2) {
+                    stroke.points.add(Offset((point[0] as num).toDouble(), (point[1] as num).toDouble()));
+                  }
+                }
+              }
+              if (stroke.points.isNotEmpty) strokes.add(stroke);
+            }
+          }
+          final photos = <_PlacedPhoto>[];
+          final photoRows = raw['photos'];
+          if (photoRows is List) {
+            for (final row in photoRows) {
+              if (row is! Map) continue;
+              final name = row['file']?.toString();
+              if (name == null) continue;
+              final bytesFile = File('${folder.path}/$name');
+              if (!bytesFile.existsSync()) continue;
+              final image = await decodeImageFromList(await bytesFile.readAsBytes());
+              photos.add(
+                _PlacedPhoto(
+                  image: image,
+                  offset: Offset((row['x'] as num?)?.toDouble() ?? 0, (row['y'] as num?)?.toDouble() ?? 0),
+                  scale: (row['s'] as num?)?.toDouble() ?? 1,
+                ),
+              );
+            }
+          }
+          if (!mounted) return;
+          setState(() {
+            _strokes.addAll(strokes);
+            _photos.addAll(photos);
+          });
+          return;
+        }
+      } catch (_) {}
+    }
+    if (cleared || !mounted) return;
+    await _loadSaved();
+  }
+
+  Future<void> _persist() async {
+    final folder = await _folder();
+    final clearedMark = File('${folder.path}/cleared');
+    if (_strokes.isEmpty && _photos.isEmpty) {
+      final board = File('${folder.path}/board.json');
+      if (board.existsSync()) board.deleteSync();
+      return;
+    }
+    if (clearedMark.existsSync()) clearedMark.deleteSync();
+    final photoJson = <Map<String, Object>>[];
+    for (var i = 0; i < _photos.length; i++) {
+      final photo = _photos[i];
+      final name = 'p$i.png';
+      final data = await photo.image.toByteData(format: ui.ImageByteFormat.png);
+      if (data != null) {
+        await File('${folder.path}/$name').writeAsBytes(data.buffer.asUint8List(), flush: true);
+      }
+      photoJson.add({'file': name, 'x': photo.offset.dx, 'y': photo.offset.dy, 's': photo.scale});
+    }
+    final payload = {
+      'strokes': [
+        for (final stroke in _strokes)
+          {
+            'c': stroke.color.toARGB32(),
+            'w': stroke.width,
+            'e': stroke.erase,
+            'p': [
+              for (final point in stroke.points) [point.dx, point.dy],
+            ],
+          },
+      ],
+      'photos': photoJson,
+    };
+    await File('${folder.path}/board.json').writeAsString(jsonEncode(payload), flush: true);
+  }
+
+  Future<void> _markCleared() async {
+    final folder = await _folder();
+    final board = File('${folder.path}/board.json');
+    if (board.existsSync()) board.deleteSync();
+    await File('${folder.path}/cleared').writeAsString('1');
+  }
 
   Future<void> _loadSaved() async {
     final url = SiteSession.storageUrl(widget.sketchPath);
@@ -145,6 +261,7 @@ class _ErrorSketchPageState extends State<ErrorSketchPage> {
       _selected = photo;
       _tool = _SketchTool.move;
     });
+    _persist();
   }
 
   void _toast(String message) {
@@ -173,6 +290,7 @@ class _ErrorSketchPageState extends State<ErrorSketchPage> {
                 _saved?.dispose();
                 _saved = null;
               });
+              _markCleared();
             },
             child: const Text('Temizle'),
           ),
@@ -191,6 +309,8 @@ class _ErrorSketchPageState extends State<ErrorSketchPage> {
     if (boundary == null) return;
     setState(() => _saving = true);
     try {
+      await _persist();
+      await WidgetsBinding.instance.endOfFrame;
       final image = await boundary.toImage(pixelRatio: 1.5);
       final data = await image.toByteData(format: ui.ImageByteFormat.png);
       image.dispose();
@@ -200,7 +320,11 @@ class _ErrorSketchPageState extends State<ErrorSketchPage> {
       await file.writeAsBytes(data.buffer.asUint8List(), flush: true);
       final path = await SiteSession.instance.saveErrorSketch(widget.questionId, file.path);
       if (!mounted) return;
-      Navigator.of(context).pop(path);
+      setState(() {
+        _saving = false;
+        _serverPath = path;
+      });
+      _toast('Çözüm karalaması kaydedildi.');
     } catch (error) {
       if (!mounted) return;
       setState(() => _saving = false);
@@ -242,57 +366,109 @@ class _ErrorSketchPageState extends State<ErrorSketchPage> {
     return null;
   }
 
+  Future<void> _close() async {
+    if (_closing) return;
+    _closing = true;
+    await _persist();
+    if (!mounted) return;
+    setState(() => _canLeave = true);
+    await WidgetsBinding.instance.endOfFrame;
+    if (mounted) Navigator.of(context).pop(_serverPath);
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return PopScope(
+      canPop: _canLeave,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
+        _close();
+      },
+      child: Scaffold(
       backgroundColor: const Color(0xFFF6F3EE),
       appBar: AppBar(
         backgroundColor: const Color(0xFFF6F3EE),
         elevation: 0,
         scrolledUnderElevation: 0,
         foregroundColor: DbColors.ink,
+        leading: IconButton(onPressed: _close, icon: const Icon(Icons.arrow_back_rounded)),
         title: Text('Karalama Defteri', style: DbText.style(size: 18, weight: FontWeight.w900)),
       ),
       body: Column(
         children: [
-          SizedBox(
-            height: 96,
-            child: ListView(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 12),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(8, 0, 8, 4),
+            child: Column(
               children: [
-                _toolButton(Icons.edit_rounded, _tool == _SketchTool.pen, () => setState(() => _tool = _SketchTool.pen)),
-                _toolButton(Icons.open_with_rounded, _tool == _SketchTool.move, () => setState(() => _tool = _SketchTool.move)),
-                _toolButton(Icons.auto_fix_normal_rounded, _tool == _SketchTool.eraser, () => setState(() => _tool = _SketchTool.eraser)),
-                const SizedBox(width: 8),
-                for (final color in _colors)
-                  GestureDetector(
-                    onTap: () => setState(() => _color = color),
-                    child: Container(
-                      width: 28,
-                      height: 28,
-                      margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 34),
-                      decoration: BoxDecoration(
-                        color: color,
-                        shape: BoxShape.circle,
-                        border: Border.all(color: _color == color ? DbColors.ink : Colors.white, width: 2),
+                Row(
+                  children: [
+                    _toolButton(Icons.edit_rounded, _tool == _SketchTool.pen, () => setState(() => _tool = _SketchTool.pen)),
+                    _toolButton(Icons.open_with_rounded, _tool == _SketchTool.move, () => setState(() => _tool = _SketchTool.move)),
+                    _toolButton(Icons.auto_fix_normal_rounded, _tool == _SketchTool.eraser, () => setState(() => _tool = _SketchTool.eraser)),
+                    for (final color in _colors)
+                      GestureDetector(
+                        onTap: () => setState(() => _color = color),
+                        child: Container(
+                          width: 22,
+                          height: 22,
+                          margin: const EdgeInsets.symmetric(horizontal: 3),
+                          decoration: BoxDecoration(
+                            color: color,
+                            shape: BoxShape.circle,
+                            border: Border.all(color: _color == color ? DbColors.ink : Colors.white, width: 2),
+                          ),
+                        ),
+                      ),
+                    Expanded(
+                      child: Slider(
+                        value: _width,
+                        min: 1,
+                        max: 24,
+                        activeColor: DbColors.navy,
+                        onChanged: (value) => setState(() => _width = value),
                       ),
                     ),
-                  ),
-                SizedBox(
-                  width: 120,
-                  child: Slider(
-                    value: _width,
-                    min: 1,
-                    max: 24,
-                    activeColor: DbColors.navy,
-                    onChanged: (value) => setState(() => _width = value),
-                  ),
+                    Text('${_width.round()}', style: DbText.style(size: 12, weight: FontWeight.w800, color: DbColors.muted)),
+                  ],
                 ),
-                TextButton.icon(onPressed: _addQuestion, icon: const Icon(Icons.add_rounded), label: const Text('Soruyu ekle')),
-                IconButton(onPressed: _addGallery, icon: const Icon(Icons.image_outlined, color: DbColors.navy)),
-                IconButton(onPressed: _clear, icon: const Icon(Icons.delete_outline_rounded, color: DbColors.navy)),
-                TextButton(onPressed: _saving ? null : _save, child: Text(_saving ? 'Kaydediliyor' : 'Çözüm olarak kaydet')),
+                Row(
+                  children: [
+                    TextButton.icon(
+                      onPressed: _addQuestion,
+                      icon: const Icon(Icons.add_rounded, size: 16),
+                      label: Text('Soruyu ekle', style: DbText.style(size: 13, weight: FontWeight.w800, color: DbColors.navy)),
+                      style: TextButton.styleFrom(
+                        visualDensity: VisualDensity.compact,
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: _addGallery,
+                      visualDensity: VisualDensity.compact,
+                      icon: const Icon(Icons.image_outlined, color: DbColors.navy, size: 20),
+                    ),
+                    IconButton(
+                      onPressed: _clear,
+                      visualDensity: VisualDensity.compact,
+                      tooltip: 'Tüm sayfayı sil',
+                      icon: const Icon(Icons.delete_outline_rounded, color: DbColors.navy, size: 20),
+                    ),
+                    const Spacer(),
+                    FilledButton.icon(
+                      onPressed: _saving ? null : _save,
+                      style: FilledButton.styleFrom(
+                        backgroundColor: DbColors.navy,
+                        visualDensity: VisualDensity.compact,
+                        padding: const EdgeInsets.symmetric(horizontal: 10),
+                      ),
+                      icon: Icon(_saving ? Icons.hourglass_top_rounded : Icons.save_outlined, size: 16),
+                      label: Text(
+                        _saving ? 'Kaydediliyor' : 'Çözüm olarak kaydet',
+                        style: DbText.style(size: 12, weight: FontWeight.w800, color: Colors.white),
+                      ),
+                    ),
+                  ],
+                ),
               ],
             ),
           ),
@@ -320,6 +496,7 @@ class _ErrorSketchPageState extends State<ErrorSketchPage> {
                   return GestureDetector(
                     onPanStart: (details) => _start(details.localPosition),
                     onPanUpdate: (details) => _move(_tool == _SketchTool.move ? details.delta : details.localPosition),
+                    onPanEnd: (_) => _persist(),
                     child: ClipRRect(
                       borderRadius: BorderRadius.circular(16),
                       child: Stack(
@@ -352,19 +529,20 @@ class _ErrorSketchPageState extends State<ErrorSketchPage> {
           ),
         ],
       ),
+    ),
     );
   }
 
   Widget _toolButton(IconData icon, bool on, VoidCallback tap) {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 28),
+      padding: const EdgeInsets.symmetric(horizontal: 2),
       child: Material(
         color: on ? DbColors.navy : Colors.white,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(10),
         child: InkWell(
           onTap: tap,
-          borderRadius: BorderRadius.circular(12),
-          child: SizedBox(width: 40, height: 40, child: Icon(icon, color: on ? Colors.white : DbColors.ink, size: 20)),
+          borderRadius: BorderRadius.circular(10),
+          child: SizedBox(width: 34, height: 34, child: Icon(icon, color: on ? Colors.white : DbColors.ink, size: 18)),
         ),
       ),
     );

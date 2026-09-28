@@ -42,6 +42,9 @@ dependencies:
   url_launcher: ^6.3.2
   image_picker: ^1.2.3
   image_cropper: ^12.2.1
+  record: ^7.1.1
+  audioplayers: ^6.8.1
+  file_picker: ^13.1.0
 
 dev_dependencies:
   flutter_test:
@@ -70,6 +73,7 @@ flutter:
     - assets/welcome/program.png
     - assets/welcome/score.png
     - assets/welcome/summit.png
+    - assets/dungeon/dungeon_robot.png
 
   fonts:
     - family: Nunito

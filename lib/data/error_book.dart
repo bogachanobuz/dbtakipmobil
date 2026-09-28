@@ -105,6 +105,10 @@ class ErrorQuestion {
     this.retentionStage = 0,
     this.createdAt,
     this.solutionSketchPath,
+    this.solutionAudioPath,
+    this.solutionVideoPath,
+    this.solutionPhotoPath,
+    this.solutionVideoUrl,
     this.daysLeft,
     this.options = const ['A', 'B', 'C', 'D', 'E'],
   });
@@ -136,6 +140,10 @@ class ErrorQuestion {
   int retentionStage;
   final String? createdAt;
   String? solutionSketchPath;
+  String? solutionAudioPath;
+  String? solutionVideoPath;
+  String? solutionPhotoPath;
+  String? solutionVideoUrl;
   final int? daysLeft;
   final List<String> options;
 
@@ -223,6 +231,10 @@ class ErrorQuestion {
       retentionStage: _int(json['retention_stage']) ?? 0,
       createdAt: _text(json['created_at']),
       solutionSketchPath: _text(json['solution_sketch_path']),
+      solutionAudioPath: _text(json['solution_audio_path']),
+      solutionVideoPath: _text(json['solution_video_path']),
+      solutionPhotoPath: _text(json['solution_photo_path']),
+      solutionVideoUrl: _text(json['solution_video_url']),
       daysLeft: _int(json['days_left']),
       options: _options(json['options']),
     );
@@ -242,6 +254,49 @@ class ErrorTrashSource {
   final int id;
   final String name;
   final int daysLeft;
+}
+
+class MediaQuota {
+  const MediaQuota({
+    required this.photoRemaining,
+    required this.photoLimit,
+    required this.videoRemaining,
+    required this.videoLimit,
+  });
+
+  final int photoRemaining;
+  final int photoLimit;
+  final int videoRemaining;
+  final int videoLimit;
+
+  factory MediaQuota.fromJson(Map<dynamic, dynamic> json) {
+    final photo = json['photo'];
+    final video = json['video'];
+    int remaining(dynamic bucket, int fallback) {
+      if (bucket is Map && bucket['remaining'] is num) return (bucket['remaining'] as num).toInt();
+      return fallback;
+    }
+
+    int limit(dynamic bucket, int fallback) {
+      if (bucket is Map && bucket['limit'] is num) return (bucket['limit'] as num).toInt();
+      return fallback;
+    }
+
+    return MediaQuota(
+      photoRemaining: remaining(photo, 100),
+      photoLimit: limit(photo, 100),
+      videoRemaining: remaining(video, 20),
+      videoLimit: limit(video, 20),
+    );
+  }
+}
+
+class SolutionUpload {
+  const SolutionUpload({required this.message, required this.path, required this.quota});
+
+  final String message;
+  final String? path;
+  final MediaQuota quota;
 }
 
 class ErrorNamedImage {

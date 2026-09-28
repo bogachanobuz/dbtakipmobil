@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../data/note_drafts.dart';
 import '../../data/site_session.dart';
 import '../../demo/demo_account.dart';
 import '../../demo/demo_week.dart';
@@ -45,6 +46,7 @@ class _ProgramScreenState extends State<ProgramScreen> {
       _loading = true;
       _loadLive();
       _loadHello();
+      NoteDrafts.instance.flushCurrent();
     } else {
       _days = DemoWeek.build();
       _hello = DemoAccount.firstName;

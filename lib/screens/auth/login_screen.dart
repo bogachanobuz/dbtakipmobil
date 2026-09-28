@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../data/note_drafts.dart';
 import '../../data/site_session.dart';
 import '../../demo/demo_account.dart';
 import '../../screens/program/program_screen.dart';
@@ -65,6 +66,10 @@ class _LoginScreenState extends State<LoginScreen> {
       }
       await prefs.setBool(DemoAccount.sessionKey, true);
       await prefs.setBool(SiteSession.liveKey, true);
+      final profile = await SiteSession.instance.profile();
+      final account = (profile?.email.trim().isNotEmpty ?? false) ? profile!.email : email;
+      await NoteDrafts.instance.rememberAccount(account);
+      await NoteDrafts.instance.flushCurrent();
       if (!mounted) return;
       Navigator.of(context).pushReplacement(
         MaterialPageRoute<void>(builder: (_) => const ProgramScreen(live: true)),

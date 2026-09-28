@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
 
 import '../../data/error_book.dart';
+import '../../data/note_drafts.dart';
 import '../../data/site_session.dart';
 import '../../demo/demo_week.dart';
 import '../../theme/db_theme.dart';
 import 'error_add_flow.dart';
 import 'error_sketch_page.dart';
+import 'today_review_page.dart';
+import 'error_solution_panel.dart';
 
 class ErrorBookScreen extends StatefulWidget {
   const ErrorBookScreen({super.key, this.live = false});
@@ -29,57 +32,13 @@ class _ErrorBookScreenState extends State<ErrorBookScreen> {
   }
 
   Future<void> _addLesson() async {
-    final name = TextEditingController();
-    var color = '#4F46E5';
-    final saved = await showDialog<bool>(
+    final result = await showDialog<_NewLesson>(
       context: context,
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setLocal) {
-            return AlertDialog(
-              title: Text('Özel ders ekle', style: DbText.style(size: 18, weight: FontWeight.w900)),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  TextField(
-                    controller: name,
-                    decoration: const InputDecoration(hintText: 'Örn: Paragraf'),
-                  ),
-                  const SizedBox(height: 12),
-                  Wrap(
-                    spacing: 8,
-                    children: [
-                      for (final swatch in ['#4F46E5', '#0EA5E9', '#16A34A', '#EA580C', '#DB2777', '#1E4D8C'])
-                        GestureDetector(
-                          onTap: () => setLocal(() => color = swatch),
-                          child: Container(
-                            width: 22,
-                            height: 22,
-                            decoration: BoxDecoration(
-                              color: Color(int.parse(swatch.replaceAll('#', ''), radix: 16) + 0xFF000000),
-                              shape: BoxShape.circle,
-                              border: Border.all(color: color == swatch ? DbColors.ink : Colors.transparent, width: 2),
-                            ),
-                          ),
-                        ),
-                    ],
-                  ),
-                ],
-              ),
-              actions: [
-                TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Vazgeç')),
-                TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Ekle')),
-              ],
-            );
-          },
-        );
-      },
+      builder: (_) => const _AddLessonDialog(),
     );
-    final lessonName = name.text.trim();
-    name.dispose();
-    if (saved != true || lessonName.length < 2 || !mounted) return;
+    if (result == null || !mounted) return;
     try {
-      await SiteSession.instance.addCustomLesson(lessonName, color);
+      await SiteSession.instance.addCustomLesson(result.name, result.color);
       await _load();
     } catch (error) {
       if (!mounted) return;
@@ -95,6 +54,7 @@ class _ErrorBookScreenState extends State<ErrorBookScreen> {
     });
     try {
       final book = await SiteSession.instance.errorNotebook();
+      await NoteDrafts.instance.overlay(book.questions);
       List<ErrorLesson> lessons = const [];
       try {
         lessons = await SiteSession.instance.errorLessons();
@@ -121,6 +81,7 @@ class _ErrorBookScreenState extends State<ErrorBookScreen> {
     final groups = book?.groups(_lessons) ?? const <ErrorLessonGroup>[];
     return Scaffold(
       backgroundColor: const Color(0xFFF6F3EE),
+      resizeToAvoidBottomInset: false,
       appBar: AppBar(
         backgroundColor: const Color(0xFFF6F3EE),
         elevation: 0,
@@ -166,12 +127,9 @@ class _ErrorBookScreenState extends State<ErrorBookScreen> {
                             : () {
                                 Navigator.of(context).push(
                                   MaterialPageRoute<void>(
-                                    builder: (_) => _QuestionPage(
-                                      title: 'Bugünün tekrarları',
-                                      questions: book.dueQuestions,
-                                    ),
+                                    builder: (_) => TodayReviewPage(questions: book.dueQuestions),
                                   ),
-                                );
+                                ).then((_) => _load());
                               },
                       ),
                       const SizedBox(height: 10),
@@ -228,6 +186,84 @@ class _ErrorBookScreenState extends State<ErrorBookScreen> {
                   ),
                 ),
     );
+  }
+}
+
+class _NewLesson {
+  const _NewLesson(this.name, this.color);
+
+  final String name;
+  final String color;
+}
+
+class _AddLessonDialog extends StatefulWidget {
+  const _AddLessonDialog();
+
+  @override
+  State<_AddLessonDialog> createState() => _AddLessonDialogState();
+}
+
+class _AddLessonDialogState extends State<_AddLessonDialog> {
+  final _name = TextEditingController();
+  var _color = '#4F46E5';
+
+  @override
+  void dispose() {
+    _name.dispose();
+    super.dispose();
+  }
+
+  void _close(_NewLesson? result) {
+    FocusManager.instance.primaryFocus?.unfocus();
+    Navigator.of(context).pop(result);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      scrollable: true,
+      title: Text('Özel ders ekle', style: DbText.style(size: 18, weight: FontWeight.w900)),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextField(
+            controller: _name,
+            textInputAction: TextInputAction.done,
+            decoration: const InputDecoration(hintText: 'Örn: Paragraf'),
+            onSubmitted: (_) => _submit(),
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            children: [
+              for (final swatch in ['#4F46E5', '#0EA5E9', '#16A34A', '#EA580C', '#DB2777', '#1E4D8C'])
+                GestureDetector(
+                  onTap: () => setState(() => _color = swatch),
+                  child: Container(
+                    width: 22,
+                    height: 22,
+                    decoration: BoxDecoration(
+                      color: Color(int.parse(swatch.replaceAll('#', ''), radix: 16) + 0xFF000000),
+                      shape: BoxShape.circle,
+                      border: Border.all(color: _color == swatch ? DbColors.ink : Colors.transparent, width: 2),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(onPressed: () => _close(null), child: const Text('Vazgeç')),
+        TextButton(onPressed: _submit, child: const Text('Ekle')),
+      ],
+    );
+  }
+
+  void _submit() {
+    final name = _name.text.trim();
+    if (name.length < 2) return;
+    _close(_NewLesson(name, _color));
   }
 }
 
@@ -360,12 +396,11 @@ class _SourcePageState extends State<_SourcePage> {
 }
 
 class _QuestionPage extends StatefulWidget {
-  const _QuestionPage({required this.questions, this.lesson, this.kaynak, this.title});
+  const _QuestionPage({required this.questions, this.lesson, this.kaynak});
 
   final ErrorLessonGroup? lesson;
   final ErrorKaynak? kaynak;
   final List<ErrorQuestion> questions;
-  final String? title;
 
   @override
   State<_QuestionPage> createState() => _QuestionPageState();
@@ -375,7 +410,7 @@ class _QuestionPageState extends State<_QuestionPage> {
   @override
   Widget build(BuildContext context) {
     final questions = widget.questions;
-    final title = widget.title ?? widget.kaynak?.name ?? 'Sorular';
+    final title = widget.kaynak?.name ?? 'Sorular';
     return Scaffold(
       backgroundColor: const Color(0xFFF6F3EE),
       appBar: AppBar(
@@ -406,7 +441,16 @@ class _QuestionPageState extends State<_QuestionPage> {
                     borderRadius: BorderRadius.circular(16),
                     onTap: () {
                       Navigator.of(context)
-                          .push(MaterialPageRoute<void>(builder: (_) => _QuestionDetail(question: question)))
+                          .push(
+                            MaterialPageRoute<void>(
+                              builder: (_) => _QuestionDetail(
+                                question: question,
+                                onChanged: () {
+                                  if (mounted) setState(() {});
+                                },
+                              ),
+                            ),
+                          )
                           .then((_) {
                         if (mounted) setState(() {});
                       });
@@ -443,18 +487,21 @@ class _QuestionPageState extends State<_QuestionPage> {
                                 Text(question.preview, style: DbText.style(size: 13, weight: FontWeight.w700, color: DbColors.muted)),
                                 if (question.originLine != null)
                                   Text(question.originLine!, style: DbText.style(size: 12, weight: FontWeight.w800, color: DbColors.navy)),
-                                if (question.errorReasonLabel != null || question.difficultyLabel != null || question.mistakeNote != null || question.correctSolutionNote != null)
+                                if (question.errorReasonLabel != null || question.difficultyLabel != null)
                                   Padding(
                                     padding: const EdgeInsets.only(top: 6),
                                     child: Text(
                                       [
                                         if (question.errorReasonLabel != null) question.errorReasonLabel!,
                                         if (question.difficultyLabel != null) question.difficultyLabel!,
-                                        if (question.mistakeNote != null || question.correctSolutionNote != null) 'Not',
                                       ].join(' · '),
                                       style: DbText.style(size: 12, weight: FontWeight.w800, color: DbColors.ink),
                                     ),
                                   ),
+                                if (question.mistakeNote != null)
+                                  Text(question.mistakeNote!, style: DbText.style(size: 12, weight: FontWeight.w700, color: DbColors.muted)),
+                                if (question.correctSolutionNote != null)
+                                  Text(question.correctSolutionNote!, style: DbText.style(size: 12, weight: FontWeight.w700, color: DbColors.navy)),
                                 const SizedBox(height: 4),
                                 Text(
                                   [
@@ -480,9 +527,10 @@ class _QuestionPageState extends State<_QuestionPage> {
 }
 
 class _QuestionDetail extends StatefulWidget {
-  const _QuestionDetail({required this.question});
+  const _QuestionDetail({required this.question, this.onChanged});
 
   final ErrorQuestion question;
+  final VoidCallback? onChanged;
 
   @override
   State<_QuestionDetail> createState() => _QuestionDetailState();
@@ -492,22 +540,80 @@ class _QuestionDetailState extends State<_QuestionDetail> {
   late final TextEditingController _correct;
   late final TextEditingController _mistake;
   var _busy = false;
+  var _notesReady = false;
   String? _notice;
+  String? _noteStatus;
+  String? _account;
+  var _syncedCorrect = '';
+  var _syncedMistake = '';
 
   ErrorQuestion get question => widget.question;
 
   @override
   void initState() {
     super.initState();
-    _correct = TextEditingController(text: question.correctSolutionNote ?? '');
-    _mistake = TextEditingController(text: question.mistakeNote ?? '');
+    _correct = TextEditingController();
+    _mistake = TextEditingController();
+    _bootNotes();
+  }
+
+  Future<void> _bootNotes() async {
+    final account = await NoteDrafts.instance.currentAccount();
+    final draft = account == null ? null : await NoteDrafts.instance.peek(account, question.id);
+    final correct = draft?.correct ?? question.correctSolutionNote ?? '';
+    final mistake = draft?.mistake ?? question.mistakeNote ?? '';
+    _syncedCorrect = draft?.baseCorrect ?? (question.correctSolutionNote ?? '').trim();
+    _syncedMistake = draft?.baseMistake ?? (question.mistakeNote ?? '').trim();
+    _account = account;
+    _correct.text = correct;
+    _mistake.text = mistake;
+    question.correctSolutionNote = correct.trim().isEmpty ? null : correct.trim();
+    question.mistakeNote = mistake.trim().isEmpty ? null : mistake.trim();
+    _correct.addListener(_onNotesChanged);
+    _mistake.addListener(_onNotesChanged);
+    if (!mounted) return;
+    setState(() => _notesReady = true);
   }
 
   @override
   void dispose() {
+    _correct.removeListener(_onNotesChanged);
+    _mistake.removeListener(_onNotesChanged);
     _correct.dispose();
     _mistake.dispose();
     super.dispose();
+  }
+
+  Future<void> _onNotesChanged() async {
+    if (!_notesReady) return;
+    final correct = _correct.text.trim();
+    final mistake = _mistake.text.trim();
+    question.correctSolutionNote = correct.isEmpty ? null : correct;
+    question.mistakeNote = mistake.isEmpty ? null : mistake;
+    widget.onChanged?.call();
+    final account = _account;
+    if (account == null) return;
+    if (correct == _syncedCorrect && mistake == _syncedMistake) {
+      await NoteDrafts.instance.drop(account, question.id);
+      if (mounted) setState(() => _noteStatus = null);
+      return;
+    }
+    if (mounted) setState(() => _noteStatus = 'Kaydedilecek');
+    await NoteDrafts.instance.stage(
+      account: account,
+      questionId: question.id,
+      correct: correct,
+      mistake: mistake,
+      baseCorrect: _syncedCorrect,
+      baseMistake: _syncedMistake,
+      onSent: (sentCorrect, sentMistake) {
+        if (!mounted) return;
+        if (_correct.text.trim() != sentCorrect || _mistake.text.trim() != sentMistake) return;
+        _syncedCorrect = sentCorrect;
+        _syncedMistake = sentMistake;
+        setState(() => _noteStatus = 'Kaydedildi');
+      },
+    );
   }
 
   Future<void> _answer(String letter) async {
@@ -526,30 +632,6 @@ class _QuestionDetailState extends State<_QuestionDetail> {
       if (!mounted) return;
       setState(() => _busy = false);
       final message = error is SiteException ? error.message : 'Cevap kontrol edilemedi.';
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
-    }
-  }
-
-  Future<void> _saveNotes() async {
-    if (_busy) return;
-    setState(() => _busy = true);
-    try {
-      final message = await SiteSession.instance.saveErrorNotes(
-        question.id,
-        correctNote: _correct.text.trim(),
-        mistakeNote: _mistake.text.trim(),
-      );
-      question.correctSolutionNote = _correct.text.trim().isEmpty ? null : _correct.text.trim();
-      question.mistakeNote = _mistake.text.trim().isEmpty ? null : _mistake.text.trim();
-      if (!mounted) return;
-      setState(() {
-        _busy = false;
-        _notice = message;
-      });
-    } catch (error) {
-      if (!mounted) return;
-      setState(() => _busy = false);
-      final message = error is SiteException ? error.message : 'Notlar kaydedilemedi.';
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
     }
   }
@@ -695,25 +777,36 @@ class _QuestionDetailState extends State<_QuestionDetail> {
             Text(_notice!, style: DbText.style(size: 14, weight: FontWeight.w800, color: DbColors.navy)),
           ],
           const SizedBox(height: 18),
-          Text('Nerede takıldın', style: DbText.style(size: 14, weight: FontWeight.w900)),
+          Text('Neyi yanlış yaptın?', style: DbText.style(size: 16, weight: FontWeight.w900)),
+          const SizedBox(height: 4),
+          Text('Nerede takıldın, hangi adımı kaçırdın?', style: DbText.style(size: 13, weight: FontWeight.w700, color: DbColors.navy)),
           const SizedBox(height: 8),
           TextField(
             controller: _mistake,
-            minLines: 2,
-            maxLines: 4,
-            decoration: _noteField('Hata notu'),
+            minLines: 3,
+            maxLines: 6,
+            decoration: _noteField('Kısaca yaz…'),
           ),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _correct,
-            minLines: 2,
-            maxLines: 4,
-            decoration: _noteField('Doğru çözüm notu'),
-          ),
-          Align(
-            alignment: Alignment.centerRight,
-            child: TextButton(onPressed: _busy ? null : _saveNotes, child: const Text('Notu kaydet')),
-          ),
+          if (question.solved || _mistake.text.trim().isNotEmpty || _correct.text.trim().isNotEmpty) ...[
+            const SizedBox(height: 16),
+            Text('Bu soru bana ne öğretti?', style: DbText.style(size: 16, weight: FontWeight.w900)),
+            const SizedBox(height: 4),
+            Text('Doğru çözümü kendi cümlelerinle yaz.', style: DbText.style(size: 13, weight: FontWeight.w700, color: DbColors.navy)),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _correct,
+              minLines: 3,
+              maxLines: 6,
+              decoration: _noteField('Ne öğrendin?'),
+            ),
+          ],
+          if (_noteStatus != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text(_noteStatus!, style: DbText.style(size: 13, weight: FontWeight.w800, color: DbColors.navy)),
+            ),
+          const SizedBox(height: 18),
+          ErrorSolutionPanel(question: question),
         ],
       ),
     );

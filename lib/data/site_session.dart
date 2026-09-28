@@ -584,6 +584,50 @@ class SiteSession {
     return data['message']?.toString() ?? 'Notlar kaydedildi.';
   }
 
+  Future<MediaQuota> mediaQuota() async {
+    final data = await _studentJson('/student/hata-defteri/media-quota', 'Çözüm hakları alınamadı.');
+    final quota = data['media_quota'];
+    if (quota is! Map) return const MediaQuota(photoRemaining: 100, photoLimit: 100, videoRemaining: 20, videoLimit: 20);
+    return MediaQuota.fromJson(quota);
+  }
+
+  Future<SolutionUpload> uploadSolutionMedia(int id, String type, String filePath, String filename) async {
+    final dio = await _client();
+    final form = FormData.fromMap({
+      'type': type,
+      'file': await MultipartFile.fromFile(filePath, filename: filename),
+    });
+    final res = await dio.post<dynamic>(
+      '/student/hata-defteri/$id/solution-media',
+      data: form,
+      options: Options(headers: const {'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest'}),
+    );
+    final data = _asJson(res, 'Çözüm yüklenemedi.');
+    if (data['success'] != true) throw SiteException(_apiMessage(data, 'Çözüm yüklenemedi.'));
+    final quota = data['media_quota'];
+    return SolutionUpload(
+      message: data['message']?.toString() ?? 'Yüklendi.',
+      path: data['path']?.toString(),
+      quota: quota is Map
+          ? MediaQuota.fromJson(quota)
+          : const MediaQuota(photoRemaining: 100, photoLimit: 100, videoRemaining: 20, videoLimit: 20),
+    );
+  }
+
+  Future<String> deleteSolutionMedia(int id, String type) async {
+    final data = await _errorDelete('/student/hata-defteri/$id/solution-media/$type', 'Medya silinemedi.');
+    return data['message']?.toString() ?? 'Medya silindi.';
+  }
+
+  Future<String> saveSolutionVideoUrl(int id, String url) async {
+    final data = await _errorPost('/student/hata-defteri/$id/solution-video-url', {'url': url}, 'YouTube linki kaydedilemedi.');
+    return data['solution_video_url']?.toString() ?? url;
+  }
+
+  Future<void> deleteSolutionVideoUrl(int id) async {
+    await _errorDelete('/student/hata-defteri/$id/solution-video-url', 'Link silinemedi.');
+  }
+
   Future<String> saveErrorSketch(int id, String filePath) async {
     final dio = await _client();
     final form = FormData.fromMap({

@@ -49,6 +49,8 @@
 	</dict>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Çözümünü sesli kaydetmek için mikrofon kullanılır.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Yanlış sorunun fotoğrafını hata defterine eklemek için kamera kullanılır.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
