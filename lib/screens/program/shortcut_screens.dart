@@ -418,67 +418,6 @@ class _LessonReportPageState extends State<_LessonReportPage> {
   }
 }
 
-class ErrorBookScreen extends StatelessWidget {
-  const ErrorBookScreen({super.key});
-
-  static const _lessons = [
-    ('Matematik', DemoWeek.math),
-    ('Fizik', DemoWeek.physics),
-    ('Türkçe', DemoWeek.turkish),
-    ('Kimya', DemoWeek.chemistry),
-    ('Biyoloji', DemoWeek.biology),
-    ('Tarih', DemoWeek.history),
-  ];
-
-  @override
-  Widget build(BuildContext context) {
-    return _Hub(
-      title: 'Hata Defteri',
-      lead: 'Dersini seç, kaynaklarındaki sorulara geç.',
-      child: GridView.count(
-        crossAxisCount: 2,
-        shrinkWrap: true,
-        physics: const NeverScrollableScrollPhysics(),
-        mainAxisSpacing: 10,
-        crossAxisSpacing: 10,
-        childAspectRatio: 1.45,
-        children: [
-          for (final lesson in _lessons)
-            Material(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(18),
-              child: InkWell(
-                borderRadius: BorderRadius.circular(18),
-                onTap: () {
-                  Navigator.of(context).push(
-                    MaterialPageRoute<void>(
-                      builder: (_) => _ErrorSources(lesson: lesson.$1, color: lesson.$2),
-                    ),
-                  );
-                },
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Container(
-                        width: 10,
-                        height: 10,
-                        decoration: BoxDecoration(color: lesson.$2, shape: BoxShape.circle),
-                      ),
-                      const Spacer(),
-                      Text(lesson.$1, style: DbText.style(size: 18, weight: FontWeight.w900)),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-}
-
 class ExamsScreen extends StatelessWidget {
   const ExamsScreen({super.key});
 
@@ -624,38 +563,6 @@ class _ProgramEditScreenState extends State<ProgramEditScreen> {
           if (_saved != null) ...[
             const SizedBox(height: 14),
             Text(_saved!, style: DbText.style(size: 15, weight: FontWeight.w800, color: DbColors.navy, height: 1.35)),
-          ],
-        ],
-      ),
-    );
-  }
-}
-
-class _ErrorSources extends StatelessWidget {
-  const _ErrorSources({required this.lesson, required this.color});
-
-  final String lesson;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    return _Hub(
-      title: lesson,
-      lead: 'Hangi kaynaktaki hatalarını görmek istiyorsun?',
-      child: Column(
-        children: [
-          for (final source in ['$lesson Soru Bankası', 'Orijinal $lesson']) ...[
-            _Card(
-              child: Row(
-                children: [
-                  Container(width: 6, height: 36, decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(6))),
-                  const SizedBox(width: 12),
-                  Expanded(child: Text(source, style: DbText.style(size: 16, weight: FontWeight.w900))),
-                  Text('0 soru', style: DbText.style(size: 13, weight: FontWeight.w800, color: DbColors.muted)),
-                ],
-              ),
-            ),
-            const SizedBox(height: 10),
           ],
         ],
       ),

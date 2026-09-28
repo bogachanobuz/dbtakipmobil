@@ -10,6 +10,8 @@ import '../../theme/db_theme.dart';
 import '../../widgets/db_logo.dart';
 import '../../widgets/welcome_line.dart';
 import 'mission_panel.dart';
+import 'error_add_flow.dart';
+import 'error_book_screen.dart';
 import 'shortcut_screens.dart';
 
 class ProgramScreen extends StatefulWidget {
@@ -164,7 +166,9 @@ class _ProgramScreenState extends State<ProgramScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFFF6F3EE),
+      bottomNavigationBar: ErrorCameraBar(live: widget.live),
       body: SafeArea(
+        bottom: false,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -213,7 +217,7 @@ class _ProgramScreenState extends State<ProgramScreen> {
                 padding: const EdgeInsets.symmetric(horizontal: 20),
                 children: [
                   _shortcut('Raporlar', Icons.bar_chart_rounded, ReportsScreen(live: widget.live)),
-                  _shortcut('Hata Defteri', Icons.menu_book_rounded, const ErrorBookScreen()),
+                  _shortcut('Hata Defteri', Icons.menu_book_rounded, ErrorBookScreen(live: widget.live)),
                   _shortcut('Denemeler', Icons.fact_check_rounded, const ExamsScreen()),
                   _shortcut('Program düzenleme', Icons.edit_calendar_rounded, const ProgramEditScreen()),
                 ],

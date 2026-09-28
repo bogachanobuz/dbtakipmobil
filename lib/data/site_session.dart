@@ -9,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../demo/demo_week.dart';
 import '../theme/db_theme.dart';
+import 'error_book.dart';
 
 class SiteSession {
   SiteSession._();
@@ -473,6 +474,246 @@ class SiteSession {
     final value = int.tryParse(raw, radix: 16);
     if (value == null) return DbColors.navy;
     return Color(value);
+  }
+
+  static String? storageUrl(String? raw) {
+    if (raw == null || raw.isEmpty) return null;
+    if (raw.startsWith('http')) {
+      if (raw.contains('/storage/question_banks/')) {
+        return raw.replaceFirst(RegExp(r'https?://[^/]+'), files);
+      }
+      return raw;
+    }
+    final path = raw.replaceFirst(RegExp(r'^/+'), '');
+    final host = path.contains('question_banks/') ? files : origin;
+    return '$host/storage/$path';
+  }
+
+  Future<ErrorNotebook> errorNotebook() async {
+    final data = await _studentJson('/student/hata-defteri', 'Hata defteri açılmadı.');
+    if (data['success'] != true) {
+      throw SiteException(data['message']?.toString() ?? 'Hata defteri açılmadı.');
+    }
+    return ErrorNotebook.fromJson(data);
+  }
+
+  Future<List<ErrorLesson>> errorLessons() async {
+    final data = await _studentJson('/student/hata-defteri/lessons', 'Dersler alınamadı.');
+    if (data['success'] != true) {
+      throw SiteException(data['message']?.toString() ?? 'Dersler alınamadı.');
+    }
+    final rows = data['data'];
+    if (rows is! List) return const [];
+    return [
+      for (final item in rows)
+        if (item is Map) ErrorLesson.fromJson(item),
+    ].where((lesson) => lesson.name.isNotEmpty).toList();
+  }
+
+  Future<ErrorLesson> addCustomLesson(String name, String color) async {
+    final dio = await _client();
+    final res = await dio.post<dynamic>(
+      '/student/hata-defteri/custom-lessons',
+      data: {'name': name, 'bgcolor': color},
+      options: Options(
+        contentType: Headers.jsonContentType,
+        headers: const {'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
+      ),
+    );
+    final data = _asJson(res, 'Özel ders eklenemedi.');
+    if (data['success'] != true || data['data'] is! Map) {
+      throw SiteException(_apiMessage(data, 'Özel ders eklenemedi.'));
+    }
+    return ErrorLesson.fromJson(data['data'] as Map);
+  }
+
+  Future<String> saveErrorQuestion({
+    required String imagePath,
+    required String correctAnswer,
+    required String difficulty,
+    int? lessonId,
+    String? lessonName,
+    int? subjectId,
+    String? subjectName,
+    int? kaynakId,
+    int? questionBankId,
+    String? questionBankName,
+    int? denemeId,
+  }) async {
+    final dio = await _client();
+    final form = FormData.fromMap({
+      'image_file': await MultipartFile.fromFile(imagePath, filename: 'question.jpg'),
+      'correct_answer': correctAnswer,
+      'difficulty': difficulty,
+      'lesson_id': ?lessonId,
+      if (lessonName != null && lessonName.isNotEmpty) 'lesson_name': lessonName,
+      'subject_id': ?subjectId,
+      if (subjectName != null && subjectName.isNotEmpty) 'subject_name': subjectName,
+      'hata_defteri_kaynak_id': ?kaynakId,
+      'question_bank_id': ?questionBankId,
+      if (questionBankName != null && questionBankName.isNotEmpty) 'question_bank_name': questionBankName,
+      'deneme_id': ?denemeId,
+    });
+    final res = await dio.post<dynamic>(
+      '/student/hata-defteri',
+      data: form,
+      options: Options(
+        headers: const {'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
+      ),
+    );
+    final data = _asJson(res, 'Soru kaydedilemedi.');
+    if (data['success'] != true) {
+      throw SiteException(_apiMessage(data, 'Soru kaydedilemedi.'));
+    }
+    return data['message']?.toString() ?? 'Soru başarıyla kaydedildi.';
+  }
+
+  Future<Map<String, dynamic>> checkErrorAnswer(int id, String answer) async {
+    return _errorPost('/student/hata-defteri/$id/check-answer', {'answer': answer}, 'Cevap kontrol edilemedi.');
+  }
+
+  Future<Map<String, dynamic>> toggleErrorSolved(int id) async {
+    return _errorPost('/student/hata-defteri/$id/toggle-solved', const {}, 'Durum değiştirilemedi.');
+  }
+
+  Future<String> saveErrorNotes(int id, {String? correctNote, String? mistakeNote}) async {
+    final data = await _errorPost('/student/hata-defteri/$id/notes', {
+      'correct_solution_note': correctNote ?? '',
+      'mistake_note': mistakeNote ?? '',
+    }, 'Notlar kaydedilemedi.');
+    return data['message']?.toString() ?? 'Notlar kaydedildi.';
+  }
+
+  Future<String> saveErrorSketch(int id, String filePath) async {
+    final dio = await _client();
+    final form = FormData.fromMap({
+      'sketch_file': await MultipartFile.fromFile(filePath, filename: 'sketch.png'),
+    });
+    final res = await dio.post<dynamic>(
+      '/student/hata-defteri/$id/save-solution-sketch',
+      data: form,
+      options: Options(
+        headers: const {'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
+      ),
+    );
+    final data = _asJson(res, 'Çözüm karalaması kaydedilemedi.');
+    if (data['success'] != true) {
+      throw SiteException(_apiMessage(data, 'Çözüm karalaması kaydedilemedi.'));
+    }
+    final path = data['solution_sketch_path']?.toString().trim() ?? '';
+    if (path.isEmpty) throw SiteException('Çözüm karalaması kaydedilemedi.');
+    return path;
+  }
+
+  Future<int> deleteErrorQuestion(int id) async {
+    final data = await _errorDelete('/student/hata-defteri/$id', 'Soru silinemedi.');
+    return _asInt(data['trash_count']) ?? 0;
+  }
+
+  Future<ErrorTrash> errorTrash() async {
+    final data = await _studentJson('/student/hata-defteri/trash', 'Çöp kutusu açılmadı.');
+    if (data['success'] != true) {
+      throw SiteException(data['message']?.toString() ?? 'Çöp kutusu açılmadı.');
+    }
+    final questions = data['questions'];
+    final kaynaklar = data['kaynaklar'];
+    return ErrorTrash(
+      questions: questions is List
+          ? [
+              for (final item in questions)
+                if (item is Map) ErrorQuestion.fromJson(item),
+            ].where((item) => item.id > 0).toList()
+          : const [],
+      sources: kaynaklar is List
+          ? [
+              for (final item in kaynaklar)
+                if (item is Map)
+                  ErrorTrashSource(
+                    id: _asInt(item['id']) ?? 0,
+                    name: item['name']?.toString() ?? 'Kaynak',
+                    daysLeft: _asInt(item['days_left']) ?? 0,
+                  ),
+            ].where((item) => item.id > 0).toList()
+          : const [],
+    );
+  }
+
+  Future<String> restoreErrorQuestion(int id) async {
+    final data = await _errorPost('/student/hata-defteri/$id/restore', const {}, 'Soru geri alınamadı.');
+    return data['message']?.toString() ?? 'Soru geri alındı.';
+  }
+
+  Future<String> restoreErrorSource(int id) async {
+    final data = await _errorPost('/student/hata-defteri/kaynaklar/$id/restore', const {}, 'Kaynak geri alınamadı.');
+    return data['message']?.toString() ?? 'Kaynak geri alındı.';
+  }
+
+  Future<Map<String, dynamic>> _errorPost(String path, Map<String, dynamic> body, String fallback) async {
+    final dio = await _client();
+    final res = await dio.post<dynamic>(
+      path,
+      data: body,
+      options: Options(
+        contentType: Headers.jsonContentType,
+        headers: const {'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
+      ),
+    );
+    final data = _asJson(res, fallback);
+    if (data['success'] != true) throw SiteException(_apiMessage(data, fallback));
+    return data;
+  }
+
+  Future<Map<String, dynamic>> _errorDelete(String path, String fallback) async {
+    final dio = await _client();
+    final res = await dio.delete<dynamic>(
+      path,
+      options: Options(
+        headers: const {'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
+      ),
+    );
+    final data = _asJson(res, fallback);
+    if (data['success'] != true) throw SiteException(_apiMessage(data, fallback));
+    return data;
+  }
+
+  Future<Map<String, dynamic>> _studentJson(String path, String fallback) async {
+    final dio = await _client();
+    final res = await dio.get<dynamic>(
+      path,
+      options: Options(
+        headers: const {'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
+      ),
+    );
+    return _asJson(res, fallback);
+  }
+
+  Map<String, dynamic> _asJson(Response<dynamic> res, String fallback) {
+    if (res.statusCode == 401 || res.statusCode == 419) {
+      throw SiteException('Oturum kapanmış. Tekrar gir.');
+    }
+    final data = res.data;
+    if (data is String) {
+      if (data.contains('userdologin') || data.contains('/login')) {
+        throw SiteException('Oturum kapanmış. Tekrar gir.');
+      }
+      throw SiteException(fallback);
+    }
+    if (data is! Map) throw SiteException(fallback);
+    if (res.statusCode != null && res.statusCode! >= 400) {
+      throw SiteException(_apiMessage(data, fallback));
+    }
+    return Map<String, dynamic>.from(data);
+  }
+
+  String _apiMessage(Map<dynamic, dynamic> data, String fallback) {
+    final errors = data['errors'];
+    if (errors is Map && errors.isNotEmpty) {
+      final first = errors.values.first;
+      if (first is List && first.isNotEmpty) return first.first.toString();
+      if (first != null) return first.toString();
+    }
+    final message = data['message']?.toString().trim() ?? '';
+    return message.isEmpty ? fallback : message;
   }
 }
 
