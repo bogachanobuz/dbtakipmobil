@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:cookie_jar/cookie_jar.dart';
 import 'package:dio/dio.dart';
@@ -15,18 +16,25 @@ class SiteSession {
   static final SiteSession instance = SiteSession._();
   static const liveKey = 'live_session_v1';
   static const origin = 'https://test.dbtakip.com';
+  static const files = 'https://dbtakip.com';
 
   Dio? _dio;
   PersistCookieJar? _jar;
   Map<String, List<LessonMission>>? _missions;
   Map<String, dynamic>? _rawMissions;
+  Map<String, dynamic>? _videoPacks;
+  StudentProfile? _profile;
 
   Future<Dio> _client() async {
     if (_dio != null) return _dio!;
     final dir = await getApplicationDocumentsDirectory();
+    for (final name in ['site_cookies', 'site_cookies_test']) {
+      final old = Directory('${dir.path}/$name');
+      if (old.existsSync()) old.deleteSync(recursive: true);
+    }
     final jar = PersistCookieJar(
       ignoreExpires: false,
-      storage: FileStorage('${dir.path}/site_cookies_test'),
+      storage: FileStorage('${dir.path}/site_cookies_test_v2'),
     );
     final dio = Dio(
       BaseOptions(
@@ -43,10 +51,19 @@ class SiteSession {
     dio.interceptors.add(
       InterceptorsWrapper(
         onRequest: (options, handler) async {
-          final cookies = await jar.loadForRequest(Uri.parse(origin));
+          final cookies = await jar.loadForRequest(options.uri);
+          final latest = <String, Cookie>{};
           for (final cookie in cookies) {
-            if (cookie.name != 'XSRF-TOKEN') continue;
-            options.headers['X-XSRF-TOKEN'] = Uri.decodeComponent(cookie.value);
+            latest[cookie.name] = cookie;
+          }
+          if (latest.isNotEmpty) {
+            options.headers[HttpHeaders.cookieHeader] = latest.entries
+                .map((entry) => '${entry.key}=${entry.value.value}')
+                .join('; ');
+          }
+          final xsrf = latest['XSRF-TOKEN'];
+          if (xsrf != null) {
+            options.headers['X-XSRF-TOKEN'] = Uri.decodeComponent(xsrf.value);
           }
           handler.next(options);
         },
@@ -60,12 +77,15 @@ class SiteSession {
   Future<void> clear() async {
     _missions = null;
     _rawMissions = null;
+    _videoPacks = null;
+    _profile = null;
     final jar = _jar;
     if (jar != null) await jar.deleteAll();
   }
 
   Future<String?> login(String email, String password) async {
     final dio = await _client();
+    await clear();
     final page = await dio.get<String>(
       '/tr/login',
       options: Options(responseType: ResponseType.plain, headers: {'Accept': 'text/html'}),
@@ -114,9 +134,110 @@ class SiteSession {
       );
       return _loginError(again.data ?? '') ?? 'Kullanıcı adı veya şifre hatalı.';
     }
+    await _keepResponseCookies(res);
     _missions = null;
     _rawMissions = null;
+    _videoPacks = null;
+    _profile = null;
     return null;
+  }
+
+  Future<StudentProfile?> profile() async {
+    if (_profile != null) return _profile;
+    final dio = await _client();
+    final res = await dio.get<String>(
+      '/student/settings',
+      options: Options(
+        responseType: ResponseType.plain,
+        followRedirects: false,
+        headers: {'Accept': 'text/html'},
+      ),
+    );
+    final html = res.data ?? '';
+    if (res.statusCode != 200 || html.contains('action="/userdologin"')) return null;
+    final first = _input(html, 'name');
+    if (first == null || first.isEmpty) return null;
+    _profile = StudentProfile(
+      firstName: first.split(RegExp(r'\s+')).first,
+      surname: _input(html, 'surname') ?? '',
+      email: _input(html, 'email') ?? '',
+      phone: _input(html, 'phone') ?? '',
+      bio: _textarea(html, 'bio') ?? '',
+    );
+    return _profile;
+  }
+
+  Future<Map<String, dynamic>> reportPanel(int missionId, {bool showAll = false}) async {
+    final dio = await _client();
+    final res = await dio.post<dynamic>(
+      '/student/report/getPanel',
+      data: {'mission_id': missionId, 'show_all': showAll ? 1 : 0},
+      options: Options(
+        contentType: Headers.jsonContentType,
+        headers: {'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
+      ),
+    );
+    final data = res.data;
+    if (data is! Map) throw SiteException('Rapor paneli açılmadı.');
+    if (data['status'] != 1) {
+      throw SiteException(data['error']?.toString() ?? 'Rapor paneli açılmadı.');
+    }
+    return Map<String, dynamic>.from(data);
+  }
+
+  Future<String> saveReport(Map<String, dynamic> body) async {
+    final dio = await _client();
+    final res = await dio.post<dynamic>(
+      '/student/report/save',
+      data: body,
+      options: Options(
+        contentType: Headers.jsonContentType,
+        headers: {'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
+      ),
+    );
+    final data = res.data;
+    if (data is! Map) throw SiteException('Rapor kaydedilemedi.');
+    if (data['status'] != 1) {
+      throw SiteException(data['error']?.toString() ?? 'Rapor kaydedilemedi.');
+    }
+    return data['message']?.toString() ?? 'Rapor kaydedildi.';
+  }
+
+  Future<void> _keepResponseCookies(Response<dynamic> res) async {
+    final jar = _jar;
+    if (jar == null) return;
+    final fresh = _cookiesFrom(res);
+    if (fresh.isEmpty) return;
+    await jar.deleteAll();
+    await jar.saveFromResponse(Uri.parse('$origin/'), fresh);
+  }
+
+  List<Cookie> _cookiesFrom(Response<dynamic> res) {
+    final header = res.headers[HttpHeaders.setCookieHeader];
+    if (header == null || header.isEmpty) return const [];
+    final cookies = <Cookie>[];
+    for (final line in header) {
+      for (final part in line.split(RegExp(r',(?=[^;]+?=)'))) {
+        final value = part.trim();
+        if (value.isEmpty) continue;
+        try {
+          cookies.add(Cookie.fromSetCookieValue(value));
+        } catch (_) {}
+      }
+    }
+    return cookies;
+  }
+
+  Future<Response<dynamic>> _postSchedule(Dio dio) {
+    return dio.post<dynamic>(
+      '/student/getWeeklySchedule',
+      options: Options(headers: {'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest'}),
+    );
+  }
+
+  bool _sessionRejected(Response<dynamic> res) {
+    if (res.statusCode == 401 || res.statusCode == 419) return true;
+    return res.data is! Map;
   }
 
   String _location(Response<dynamic> res) {
@@ -129,20 +250,14 @@ class SiteSession {
 
   Future<List<DayPlan>> weekly() async {
     final dio = await _client();
-    var res = await dio.post<dynamic>(
-      '/student/getWeeklySchedule',
-      options: Options(headers: {'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest'}),
-    );
-    if (res.statusCode == 419) {
-      await dio.get<String>(
-        '/tr/login',
-        options: Options(responseType: ResponseType.plain, headers: {'Accept': 'text/html'}),
-      );
-      res = await dio.post<dynamic>('/student/getWeeklySchedule');
+    var res = await _postSchedule(dio);
+    if (_sessionRejected(res)) {
+      await _keepResponseCookies(res);
+      res = await _postSchedule(dio);
     }
     final data = res.data;
-    if (data is! Map) {
-      throw SiteException('Program alınamadı. Oturum kapanmış olabilir.');
+    if (_sessionRejected(res)) {
+      throw SiteException('Oturum kapanmış. Tekrar gir.');
     }
     if (data['status'] != 1) {
       throw SiteException(data['error']?.toString() ?? 'Program bulunamadı.');
@@ -151,6 +266,7 @@ class SiteSession {
     if (days is! List) throw SiteException('Çizelge boş geldi.');
     _missions = null;
     _rawMissions = null;
+    _videoPacks = null;
     unawaited(missionsFor(null));
     final plans = [
       for (final day in days)
@@ -164,7 +280,25 @@ class SiteSession {
 
   Future<ReportBoard> reportBoard() async {
     _missions ??= await _fetchMissions();
-    return ReportBoard.fromRaw(_rawMissions ?? {});
+    return ReportBoard.fromRaw(_rawMissions ?? {}, _videoPacks);
+  }
+
+  String? videoSourceName(int? lessonId, int source) {
+    if (lessonId == null || _videoPacks == null) return null;
+    final pack = _videoPacks!['$lessonId'];
+    if (pack is! Map) return null;
+    final sources = pack['sources'];
+    if (sources is! List) return null;
+    for (final src in sources) {
+      if (src is! Map) continue;
+      final index = src['sourceIndex'];
+      final parsed = index is int ? index : int.tryParse('$index');
+      if (parsed != source) continue;
+      final name = src['qbName']?.toString().trim() ?? '';
+      if (name.isEmpty) return null;
+      return name;
+    }
+    return null;
   }
 
   Future<List<LessonMission>> missionsFor(int? lessonId) async {
@@ -184,6 +318,8 @@ class SiteSession {
     final raw = data['allMissionsData'];
     if (raw is! Map) return {};
     _rawMissions = Map<String, dynamic>.from(raw);
+    final packs = data['resourceVideoOrderByLesson'];
+    _videoPacks = packs is Map ? Map<String, dynamic>.from(packs) : {};
     return {
       for (final entry in raw.entries)
         entry.key.toString(): [
@@ -234,14 +370,67 @@ class SiteSession {
   LessonMission _mission(Map item) {
     final sourceIndex = item['resource_source_index'];
     final parsed = sourceIndex is int ? sourceIndex : int.tryParse('$sourceIndex');
+    final videoName = _nullable(item['video_name']);
+    final videoUrl = _nullable(item['video_link']);
+    final videoId = _num(item['video_link_id']);
+    final flagged = _isExtra(item['is_video_mission']) || _isExtra(item['has_resource_video']) || videoId != null;
+    final number = _num(item['video_number']) ?? _orderFrom(item['resource_video_order']);
     final mission = LessonMission(
-      subject: _text(item['subject_name'], fallback: 'Konu'),
+      subject: _text(item['subject_name'], fallback: ''),
       source: _text(item['material_name'], fallback: _text(item['class_level_name'], fallback: 'Kaynak')),
-      videoName: _nullable(item['video_name']),
+      videoName: videoName,
+      videoUrl: videoUrl,
       videoSource: parsed == null || parsed <= 0 ? 1 : parsed,
+      videoOrder: number,
+      teacher: _nullable(item['video_teacher_name']),
+      isVideo: flagged || videoName != null || videoUrl != null,
+      id: _num(item['id']),
+      subjectId: _num(item['subject_id']),
     );
     mission.done = item['completed'] == true || item['completed'] == 1 || item['completed'] == '1';
     return mission;
+  }
+
+  int? _num(dynamic value) {
+    if (value == null || value == false) return null;
+    if (value is int) return value == 0 ? null : value;
+    return int.tryParse(value.toString());
+  }
+
+  int? _orderFrom(dynamic value) {
+    if (value == null) return null;
+    final index = value is int ? value : int.tryParse(value.toString());
+    if (index == null || index >= 999999) return null;
+    return index + 1;
+  }
+
+  String? _input(String html, String field) {
+    final patterns = [
+      RegExp('name="$field" value="([^"]*)"'),
+      RegExp('id="$field"[^>]*value="([^"]*)"'),
+      RegExp('value="([^"]*)"[^>]*name="$field"'),
+    ];
+    for (final pattern in patterns) {
+      final match = pattern.firstMatch(html);
+      if (match != null) return _html(match.group(1) ?? '');
+    }
+    return null;
+  }
+
+  String? _textarea(String html, String field) {
+    final match = RegExp('name="$field"[^>]*>([\\s\\S]*?)</textarea>').firstMatch(html);
+    if (match == null) return null;
+    return _html(match.group(1) ?? '');
+  }
+
+  String _html(String value) {
+    return value
+        .replaceAll('&amp;', '&')
+        .replaceAll('&quot;', '"')
+        .replaceAll('&#039;', "'")
+        .replaceAll('&lt;', '<')
+        .replaceAll('&gt;', '>')
+        .trim();
   }
 
   String? _csrf(String html) {
@@ -295,16 +484,46 @@ class ReportTopic {
   final bool done;
 }
 
+class ReportVideo {
+  const ReportVideo({
+    required this.title,
+    required this.done,
+    this.subject = '',
+    this.missionId,
+    this.subjectId,
+    this.url,
+    this.order,
+    this.teacher,
+    this.source = 1,
+    this.sourceName,
+  });
+
+  final String? sourceName;
+  final String subject;
+  final String title;
+  final int? missionId;
+  final int? subjectId;
+  final String? url;
+  final int? order;
+  final String? teacher;
+  final bool done;
+  final int source;
+}
+
 class ReportLesson {
-  ReportLesson({required this.name, required this.color, required this.topics});
+  ReportLesson({required this.name, required this.color, required this.topics, required this.videos});
 
   final String name;
   final Color color;
   final List<ReportTopic> topics;
+  final List<ReportVideo> videos;
 
   int get total => topics.length;
   int get done => topics.where((topic) => topic.done).length;
-  bool get finished => total > 0 && done == total;
+  bool get finished {
+    if (topics.isNotEmpty) return done == total;
+    return videos.isNotEmpty && videos.every((video) => video.done);
+  }
 }
 
 class ReportBoard {
@@ -321,14 +540,33 @@ class ReportBoard {
       for (final quest in day.quests) {
         byName.putIfAbsent(
           quest.lesson,
-          () => ReportLesson(
-            name: quest.lesson,
-            color: quest.color,
-            topics: [
-              for (final mission in DemoMissions.of(quest.lesson))
-                ReportTopic(name: mission.subject, source: mission.source, done: mission.done),
-            ],
-          ),
+          () {
+            final missions = DemoMissions.of(quest.lesson);
+            return ReportLesson(
+              name: quest.lesson,
+              color: quest.color,
+              topics: [
+                for (final mission in missions)
+                  if (mission.subject.isNotEmpty)
+                    ReportTopic(name: mission.subject, source: mission.source, done: mission.done),
+              ],
+              videos: [
+                for (final mission in missions)
+                  if (mission.isVideo)
+                    ReportVideo(
+                      subject: mission.subject,
+                      missionId: mission.id,
+                      subjectId: mission.subjectId,
+                      title: mission.videoName ?? mission.subject,
+                      url: mission.videoUrl,
+                      order: mission.videoOrder,
+                      teacher: mission.teacher,
+                      done: mission.done,
+                      source: mission.videoSource,
+                    ),
+              ],
+            );
+          },
         );
       }
     }
@@ -336,37 +574,124 @@ class ReportBoard {
     return ReportBoard(lessons);
   }
 
-  factory ReportBoard.fromRaw(Map<String, dynamic> raw) {
-    final grouped = <String, List<ReportTopic>>{};
+  factory ReportBoard.fromRaw(Map<String, dynamic> raw, [Map<String, dynamic>? videoPacks]) {
+    final topics = <String, Map<String, _TopicFold>>{};
+    final videos = <String, List<ReportVideo>>{};
+    final seenVideos = <String, Set<String>>{};
     final colors = <String, Color>{};
     for (final entry in raw.values) {
       if (entry is! List) continue;
       for (final item in entry) {
         if (item is! Map) continue;
         if (_isExtra(item['ek_gorev'])) continue;
-        final name = item['lesson_name']?.toString().trim() ?? '';
-        if (name.isEmpty) continue;
+        final lesson = item['lesson_name']?.toString().trim() ?? '';
+        if (lesson.isEmpty) continue;
+        colors.putIfAbsent(lesson, () => _parseColor(item['lesson_bgcolor']?.toString()));
         final subject = item['subject_name']?.toString().trim() ?? '';
-        final source = item['material_name']?.toString().trim() ?? '';
-        grouped.putIfAbsent(name, () => []).add(
-          ReportTopic(
-            name: subject.isEmpty ? (source.isEmpty ? 'Görev' : source) : subject,
-            source: source,
-            done: item['completed'] == true || item['completed'] == 1 || item['completed'] == '1',
+        final videoName = item['video_name']?.toString().trim() ?? '';
+        final videoUrl = item['video_link']?.toString().trim() ?? '';
+        final videoId = item['video_link_id'];
+        final hasVideoId = videoId != null && videoId != 0 && '$videoId'.isNotEmpty && '$videoId' != 'null';
+        final isVideo = _isExtra(item['is_video_mission']) ||
+            _isExtra(item['has_resource_video']) ||
+            hasVideoId ||
+            videoName.isNotEmpty ||
+            videoUrl.isNotEmpty;
+        final done = item['completed'] == true || item['completed'] == 1 || item['completed'] == '1';
+        if (subject.isNotEmpty) {
+          final key = item['subject_id']?.toString() ?? subject;
+          final fold = topics.putIfAbsent(lesson, () => {})[key];
+          final source = item['material_name']?.toString().trim() ?? '';
+          if (fold == null) {
+            topics[lesson]![key] = _TopicFold(subject, source, done);
+          } else {
+            fold.done = fold.done && done;
+          }
+        }
+        if (!isVideo) continue;
+        final title = videoName.isNotEmpty ? videoName : subject;
+        if (title.isEmpty && videoUrl.isEmpty) continue;
+        final identity = hasVideoId ? 'id:$videoId' : (videoUrl.isNotEmpty ? videoUrl : title);
+        final known = seenVideos.putIfAbsent(lesson, () => {});
+        if (!known.add(identity)) continue;
+        final orderRaw = item['video_number'];
+        final order = orderRaw is int
+            ? orderRaw
+            : int.tryParse('${orderRaw ?? ''}') ??
+                () {
+                  final index = item['resource_video_order'];
+                  final parsed = index is int ? index : int.tryParse('$index');
+                  return parsed == null ? null : parsed + 1;
+                }();
+        final sourceIndex = item['resource_source_index'];
+        final source = sourceIndex is int ? sourceIndex : int.tryParse('$sourceIndex') ?? 1;
+        videos.putIfAbsent(lesson, () => []).add(
+          ReportVideo(
+            subject: subject,
+            missionId: _asInt(item['id']),
+            subjectId: _asInt(item['subject_id']),
+            title: title.isEmpty ? 'Video' : title,
+            url: videoUrl.isEmpty ? null : videoUrl,
+            order: order,
+            teacher: item['video_teacher_name']?.toString(),
+            done: done,
+            source: source <= 0 ? 1 : source,
+            sourceName: _packSourceName(videoPacks, item['lesson_id'], source <= 0 ? 1 : source),
           ),
         );
-        colors.putIfAbsent(name, () => _parseColor(item['lesson_bgcolor']?.toString()));
       }
     }
-    final lessons = [
-      for (final name in grouped.keys.toList()..sort())
-        ReportLesson(name: name, color: colors[name] ?? DbColors.navy, topics: grouped[name]!),
-    ];
-    return ReportBoard(lessons);
+    final names = {...topics.keys, ...videos.keys}.toList()..sort();
+    return ReportBoard([
+      for (final name in names)
+        ReportLesson(
+          name: name,
+          color: colors[name] ?? DbColors.navy,
+          topics: [
+            for (final fold in (topics[name] ?? {}).values)
+              ReportTopic(name: fold.name, source: fold.source, done: fold.done),
+          ],
+          videos: (videos[name] ?? [])..sort((a, b) => (a.order ?? 9999).compareTo(b.order ?? 9999)),
+        ),
+    ]);
   }
 }
 
+class _TopicFold {
+  _TopicFold(this.name, this.source, this.done);
+
+  final String name;
+  final String source;
+  bool done;
+}
+
 bool _isExtra(dynamic value) => value == true || value == 1 || value == '1';
+
+String? _packSourceName(Map<String, dynamic>? packs, dynamic lessonId, int source) {
+  if (packs == null || lessonId == null) return null;
+  final pack = packs['$lessonId'];
+  if (pack is! Map) return null;
+  final sources = pack['sources'];
+  if (sources is! List) return null;
+  for (final src in sources) {
+    if (src is! Map) continue;
+    final index = src['sourceIndex'];
+    final parsed = index is int ? index : int.tryParse('$index');
+    if (parsed != source) continue;
+    final name = src['qbName']?.toString().trim() ?? '';
+    if (name.isEmpty) return null;
+    return name;
+  }
+  return null;
+}
+
+int? _asInt(dynamic value) {
+  if (value == null || value == false) return null;
+  if (value is int) return value == 0 ? null : value;
+  final parsed = int.tryParse(value.toString());
+  if (parsed == null || parsed == 0) return null;
+  return parsed;
+}
 
 Color _parseColor(String? hex) {
   if (hex == null || hex.isEmpty) return DbColors.navy;
@@ -375,6 +700,22 @@ Color _parseColor(String? hex) {
   final value = int.tryParse(raw, radix: 16);
   if (value == null) return DbColors.navy;
   return Color(value);
+}
+
+class StudentProfile {
+  const StudentProfile({
+    required this.firstName,
+    required this.surname,
+    required this.email,
+    required this.phone,
+    required this.bio,
+  });
+
+  final String firstName;
+  final String surname;
+  final String email;
+  final String phone;
+  final String bio;
 }
 
 class SiteException implements Exception {

@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import '../../data/site_session.dart';
 import '../../demo/demo_week.dart';
 import '../../theme/db_theme.dart';
+import '../../widgets/video_showcase.dart';
+import 'did_what_sheet.dart';
 
 class MissionPanel extends StatefulWidget {
   const MissionPanel({super.key, required this.lesson, required this.color, this.lessonId});
@@ -16,9 +18,10 @@ class MissionPanel extends StatefulWidget {
 }
 
 class _MissionPanelState extends State<MissionPanel> {
-  final _search = TextEditingController();
+  final _topicSearch = TextEditingController();
+  final _videoSearch = TextEditingController();
   var _videoOrder = false;
-  var _source = 1;
+  var _source = 0;
   var _showDone = false;
   var _loading = false;
   String? _error;
@@ -57,15 +60,41 @@ class _MissionPanelState extends State<MissionPanel> {
 
   @override
   void dispose() {
-    _search.dispose();
+    _topicSearch.dispose();
+    _videoSearch.dispose();
     super.dispose();
   }
 
   List<LessonMission> _ordered() {
     final items = List<LessonMission>.of(_all);
-    if (!_videoOrder) return items;
-    items.retainWhere((mission) => mission.videoSource == _source && mission.videoName != null);
-    return items;
+    if (!_videoOrder) {
+      final seen = <String>{};
+      return [
+        for (final mission in items)
+          if (mission.subject.isNotEmpty && seen.add(mission.subject))
+            mission,
+      ];
+    }
+    final sources = _videoSources(items);
+    final selected = sources.length > 1 ? (sources.contains(_source) ? _source : sources.first) : null;
+    final videos = [
+      for (final mission in items)
+        if (mission.isVideo && (selected == null || mission.videoSource == selected)) mission,
+    ]..sort((a, b) => (a.videoOrder ?? 9999).compareTo(b.videoOrder ?? 9999));
+    return videos;
+  }
+
+  String _activeSourceName() {
+    final sources = _videoSources(_all);
+    if (sources.isEmpty) return '';
+    final selected = sources.length > 1 ? (sources.contains(_source) ? _source : sources.first) : sources.first;
+    return SiteSession.instance.videoSourceName(widget.lessonId, selected) ?? '$selected. kaynak';
+  }
+
+  List<int> _videoSources(List<LessonMission> items) {
+    final sources = items.where((mission) => mission.isVideo).map((mission) => mission.videoSource).toSet().toList()
+      ..sort();
+    return sources;
   }
 
   bool _locked(LessonMission mission, List<LessonMission> ordered) {
@@ -76,16 +105,20 @@ class _MissionPanelState extends State<MissionPanel> {
 
   @override
   Widget build(BuildContext context) {
-    final query = _search.text.trim().toLowerCase();
+    final query = (_videoOrder ? _videoSearch : _topicSearch).text.trim().toLowerCase();
     final ordered = _ordered();
     final visible = ordered.where((mission) {
       if (query.isEmpty) return true;
-      return mission.subject.toLowerCase().contains(query);
+      final label = _videoOrder ? (mission.videoName ?? mission.subject) : mission.subject;
+      return label.toLowerCase().contains(query);
     }).toList();
     final open = visible.where((mission) => !mission.done).toList();
     final done = visible.where((mission) => mission.done).toList();
-    final doneCount = _all.where((mission) => mission.done).length;
-    final progress = _all.isEmpty ? 0.0 : doneCount / _all.length;
+    final pool = _videoOrder
+        ? _ordered()
+        : _ordered();
+    final doneCount = pool.where((mission) => mission.done).length;
+    final progress = pool.isEmpty ? 0.0 : doneCount / pool.length;
 
     return Scaffold(
       backgroundColor: const Color(0xFFF6F3EE),
@@ -103,7 +136,7 @@ class _MissionPanelState extends State<MissionPanel> {
                   ),
                   const Spacer(),
                   Text(
-                    '$doneCount/${_all.length}',
+                    '$doneCount/${pool.length}',
                     style: DbText.style(size: 15, weight: FontWeight.w800, color: DbColors.muted),
                   ),
                 ],
@@ -119,7 +152,9 @@ class _MissionPanelState extends State<MissionPanel> {
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 6, 20, 12),
               child: Text(
-                '$doneCount görev bitti · ${_all.length - doneCount} kaldı',
+                _videoOrder
+                    ? '$doneCount video bitti · ${pool.length - doneCount} kaldı'
+                    : '$doneCount konu bitti · ${pool.length - doneCount} kaldı',
                 style: DbText.style(size: 15, weight: FontWeight.w700, color: DbColors.muted),
               ),
             ),
@@ -139,12 +174,13 @@ class _MissionPanelState extends State<MissionPanel> {
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: TextField(
-                controller: _search,
+                key: ValueKey(_videoOrder),
+                controller: _videoOrder ? _videoSearch : _topicSearch,
                 onChanged: (_) => setState(() {}),
                 style: DbText.style(size: 15, weight: FontWeight.w700),
                 cursorColor: DbColors.navy,
                 decoration: InputDecoration(
-                  hintText: 'Konu ara',
+                  hintText: _videoOrder ? 'Video ara' : 'Konu ara',
                   hintStyle: DbText.style(size: 15, weight: FontWeight.w700, color: const Color(0xFF9AA3B2)),
                   prefixIcon: const Icon(Icons.search_rounded, color: DbColors.navy),
                   filled: true,
@@ -176,15 +212,29 @@ class _MissionPanelState extends State<MissionPanel> {
                 ),
               ),
             ),
-            if (_videoOrder) ...[
+            if (_videoOrder && _activeSourceName().isNotEmpty) ...[
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
+                child: Text(
+                  _activeSourceName(),
+                  style: DbText.style(size: 20, weight: FontWeight.w900),
+                ),
+              ),
+            ],
+            if (_videoOrder && _videoSources(_all).length > 1) ...[
               const SizedBox(height: 10),
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 20),
-                child: Row(
+                child: Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
                   children: [
-                    _sourceChip(1),
-                    const SizedBox(width: 8),
-                    _sourceChip(2),
+                    for (final source in _videoSources(_all))
+                      _sourceChip(
+                        source,
+                        source ==
+                            (_videoSources(_all).contains(_source) ? _source : _videoSources(_all).first),
+                      ),
                   ],
                 ),
               ),
@@ -200,20 +250,23 @@ class _MissionPanelState extends State<MissionPanel> {
                             style: DbText.style(size: 15, weight: FontWeight.w800, color: DbColors.muted),
                           ),
                         )
-                      : ListView(
+                      : _videoOrder
+                          ? _videoList(visible)
+                          : ListView(
                 padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
                 children: [
                   if (open.isEmpty && done.isEmpty)
                     Padding(
                       padding: const EdgeInsets.only(top: 32),
                       child: Text(
-                        'Bu sırada görev yok.',
+                        'Bu sırada konu yok.',
                         style: DbText.style(size: 15, weight: FontWeight.w700, color: DbColors.muted),
                       ),
                     ),
                   for (final mission in open) ...[
                     _MissionCard(
                       mission: mission,
+                      lesson: widget.lesson,
                       color: widget.color,
                       videoOrder: _videoOrder,
                       locked: _locked(mission, ordered),
@@ -225,7 +278,7 @@ class _MissionPanelState extends State<MissionPanel> {
                     ),
                     const SizedBox(height: 12),
                   ],
-                  if (done.isNotEmpty)
+                  if (!_videoOrder && done.isNotEmpty)
                     Material(
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(16),
@@ -257,11 +310,12 @@ class _MissionPanelState extends State<MissionPanel> {
                         ),
                       ),
                     ),
-                  if (_showDone)
+                  if (!_videoOrder && _showDone)
                     for (final mission in done) ...[
                       const SizedBox(height: 12),
                       _MissionCard(
                         mission: mission,
+                        lesson: widget.lesson,
                         color: widget.color,
                         videoOrder: _videoOrder,
                         locked: false,
@@ -278,6 +332,45 @@ class _MissionPanelState extends State<MissionPanel> {
           ],
         ),
       ),
+    );
+  }
+
+  Widget _videoList(List<LessonMission> visible) {
+    if (visible.isEmpty) {
+      return Center(
+        child: Text(
+          'Bu kaynakta video yok.',
+          style: DbText.style(size: 15, weight: FontWeight.w700, color: DbColors.muted),
+        ),
+      );
+    }
+    return ListView.builder(
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+      itemCount: visible.length,
+      itemBuilder: (context, index) {
+        final mission = visible[index];
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 12),
+          child: VideoCard(
+            actions: true,
+            video: VideoTileData(
+              subject: mission.subject,
+              lesson: widget.lesson,
+              missionId: mission.id,
+              subjectId: mission.subjectId,
+              title: mission.videoName ?? mission.subject,
+              url: mission.videoUrl,
+              order: mission.videoOrder,
+              teacher: mission.teacher,
+              done: mission.done,
+              onDone: () {
+                mission.done = !mission.done;
+                setState(() {});
+              },
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -305,8 +398,7 @@ class _MissionPanelState extends State<MissionPanel> {
     );
   }
 
-  Widget _sourceChip(int source) {
-    final selected = _source == source;
+  Widget _sourceChip(int source, bool selected) {
     return GestureDetector(
       onTap: () => setState(() => _source = source),
       child: AnimatedContainer(
@@ -332,6 +424,7 @@ class _MissionPanelState extends State<MissionPanel> {
 class _MissionCard extends StatelessWidget {
   const _MissionCard({
     required this.mission,
+    required this.lesson,
     required this.color,
     required this.videoOrder,
     required this.locked,
@@ -340,6 +433,7 @@ class _MissionCard extends StatelessWidget {
   });
 
   final LessonMission mission;
+  final String lesson;
   final Color color;
   final bool videoOrder;
   final bool locked;
@@ -538,199 +632,17 @@ class _MissionCard extends StatelessWidget {
   }
 
   void _report(BuildContext context) {
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.white,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
-      builder: (context) => _ReportSheet(mission: mission),
+    showDidWhat(
+      context,
+      missionId: mission.id,
+      subjectId: mission.subjectId,
+      lesson: lesson,
+      subject: mission.subject,
+      videoName: mission.videoName,
+      videoUrl: mission.videoUrl,
+      videoOrder: mission.videoOrder,
+      teacherName: mission.teacher,
     );
   }
 }
 
-class _ReportSheet extends StatefulWidget {
-  const _ReportSheet({required this.mission});
-
-  final LessonMission mission;
-
-  @override
-  State<_ReportSheet> createState() => _ReportSheetState();
-}
-
-class _ReportSheetState extends State<_ReportSheet> {
-  var _videoTab = false;
-  var _saved = false;
-  final _dogru = TextEditingController(text: '0');
-  final _yanlis = TextEditingController(text: '0');
-  final _bos = TextEditingController(text: '0');
-  final _note = TextEditingController();
-  final _teacher = TextEditingController();
-  final _number = TextEditingController();
-
-  @override
-  void dispose() {
-    _dogru.dispose();
-    _yanlis.dispose();
-    _bos.dispose();
-    _note.dispose();
-    _teacher.dispose();
-    _number.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final bottom = MediaQuery.viewInsetsOf(context).bottom;
-    return Padding(
-      padding: EdgeInsets.fromLTRB(20, 16, 20, 20 + bottom),
-      child: SingleChildScrollView(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text('Ne yaptın?', style: DbText.style(size: 22, weight: FontWeight.w900)),
-            const SizedBox(height: 4),
-            Text(
-              widget.mission.subject,
-              style: DbText.style(size: 14, weight: FontWeight.w700, color: DbColors.muted),
-            ),
-            const SizedBox(height: 14),
-            Container(
-              height: 42,
-              padding: const EdgeInsets.all(4),
-              decoration: BoxDecoration(
-                color: DbColors.mist,
-                borderRadius: BorderRadius.circular(14),
-              ),
-              child: Row(
-                children: [
-                  _tab('Soru Çözdüm', !_videoTab, () => setState(() => _videoTab = false)),
-                  _tab('Video İzledim', _videoTab, () => setState(() => _videoTab = true)),
-                ],
-              ),
-            ),
-            const SizedBox(height: 16),
-            if (!_videoTab) ...[
-              Text(widget.mission.source, style: DbText.style(size: 15, weight: FontWeight.w800)),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  _num('Doğru', _dogru),
-                  const SizedBox(width: 8),
-                  _num('Yanlış', _yanlis),
-                  const SizedBox(width: 8),
-                  _num('Boş', _bos),
-                ],
-              ),
-            ] else ...[
-              if (widget.mission.videoName != null)
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: DbColors.mist,
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.play_circle_fill_rounded, color: DbColors.navy),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text('Sıradaki video', style: DbText.style(size: 12, weight: FontWeight.w800, color: DbColors.muted)),
-                            Text(widget.mission.videoName!, style: DbText.style(size: 15, weight: FontWeight.w900)),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              const SizedBox(height: 12),
-              _field(_teacher, 'Anlatıcı'),
-              const SizedBox(height: 8),
-              _field(_number, 'Kaçıncı video?', number: true),
-            ],
-            const SizedBox(height: 12),
-            _field(_note, 'Açıklama'),
-            if (_saved) ...[
-              const SizedBox(height: 12),
-              Text('Kaydedildi', style: DbText.style(size: 14, weight: FontWeight.w800, color: DbColors.navy)),
-            ],
-            const SizedBox(height: 16),
-            FilledButton(
-              onPressed: () => setState(() => _saved = true),
-              style: FilledButton.styleFrom(
-                backgroundColor: DbColors.navy,
-                minimumSize: const Size.fromHeight(50),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-              ),
-              child: Text('Kaydet', style: DbText.style(size: 16, weight: FontWeight.w800, color: Colors.white)),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _tab(String label, bool selected, VoidCallback onTap) {
-    return Expanded(
-      child: GestureDetector(
-        onTap: onTap,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 160),
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: selected ? Colors.white : Colors.transparent,
-            borderRadius: BorderRadius.circular(11),
-          ),
-          child: Text(
-            label,
-            style: DbText.style(size: 13, weight: FontWeight.w800, color: selected ? DbColors.ink : DbColors.muted),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _num(String label, TextEditingController controller) {
-    return Expanded(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(label, style: DbText.style(size: 12, weight: FontWeight.w800, color: DbColors.muted)),
-          const SizedBox(height: 6),
-          TextField(
-            controller: controller,
-            keyboardType: TextInputType.number,
-            textAlign: TextAlign.center,
-            style: DbText.style(size: 16, weight: FontWeight.w800),
-            decoration: InputDecoration(
-              filled: true,
-              fillColor: DbColors.mist,
-              contentPadding: const EdgeInsets.symmetric(vertical: 12),
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _field(TextEditingController controller, String hint, {bool number = false}) {
-    return TextField(
-      controller: controller,
-      keyboardType: number ? TextInputType.number : TextInputType.text,
-      style: DbText.style(size: 15, weight: FontWeight.w700),
-      decoration: InputDecoration(
-        hintText: hint,
-        hintStyle: DbText.style(size: 14, weight: FontWeight.w700, color: const Color(0xFF9AA3B2)),
-        filled: true,
-        fillColor: DbColors.mist,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none),
-      ),
-    );
-  }
-}

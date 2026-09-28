@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
 
+import '../../data/site_session.dart';
 import '../../demo/demo_account.dart';
 import '../../theme/db_theme.dart';
 import '../../widgets/lip_button.dart';
 
 class AccountScreen extends StatefulWidget {
-  const AccountScreen({super.key});
+  const AccountScreen({super.key, this.live = false});
+
+  final bool live;
 
   @override
   State<AccountScreen> createState() => _AccountScreenState();
@@ -26,11 +29,12 @@ class _AccountScreenState extends State<AccountScreen> {
   @override
   void initState() {
     super.initState();
-    _name = TextEditingController(text: DemoAccount.firstName);
-    _surname = TextEditingController(text: DemoAccount.surname);
-    _email = TextEditingController(text: DemoAccount.email);
-    _phone = TextEditingController(text: DemoAccount.phone);
+    _name = TextEditingController(text: widget.live ? '' : DemoAccount.firstName);
+    _surname = TextEditingController(text: widget.live ? '' : DemoAccount.surname);
+    _email = TextEditingController(text: widget.live ? '' : DemoAccount.email);
+    _phone = TextEditingController(text: widget.live ? '' : DemoAccount.phone);
     _bio = TextEditingController();
+    if (widget.live) _loadProfile();
     _current = TextEditingController();
     _next = TextEditingController();
     _again = TextEditingController();
@@ -47,6 +51,18 @@ class _AccountScreenState extends State<AccountScreen> {
     _next.dispose();
     _again.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadProfile() async {
+    final profile = await SiteSession.instance.profile();
+    if (!mounted || profile == null) return;
+    setState(() {
+      _name.text = profile.firstName;
+      _surname.text = profile.surname;
+      _email.text = profile.email;
+      _phone.text = profile.phone;
+      _bio.text = profile.bio;
+    });
   }
 
   void _save() {
@@ -117,11 +133,13 @@ class _AccountScreenState extends State<AccountScreen> {
                       '${_name.text} ${_surname.text}'.trim(),
                       style: DbText.style(size: 20, weight: FontWeight.w900),
                     ),
-                    const SizedBox(height: 2),
-                    Text(
-                      DemoAccount.className,
-                      style: DbText.style(size: 14, weight: FontWeight.w700, color: DbColors.muted),
-                    ),
+                    if (!widget.live) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        DemoAccount.className,
+                        style: DbText.style(size: 14, weight: FontWeight.w700, color: DbColors.muted),
+                      ),
+                    ],
                   ],
                 ),
               ),

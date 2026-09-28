@@ -41,13 +41,25 @@ class LessonMission {
     required this.subject,
     required this.source,
     this.videoName,
+    this.videoUrl,
     this.videoSource = 1,
+    this.videoOrder,
+    this.teacher,
+    this.isVideo = false,
+    this.id,
+    this.subjectId,
   });
 
   final String subject;
   final String source;
   final String? videoName;
+  final String? videoUrl;
   final int videoSource;
+  final int? videoOrder;
+  final String? teacher;
+  final bool isVideo;
+  final int? id;
+  final int? subjectId;
   bool done = false;
 }
 
@@ -72,6 +84,8 @@ class DemoMissions {
           source: row.source,
           videoName: row.video,
           videoSource: row.channel,
+          videoOrder: rows.indexOf(row) + 1,
+          isVideo: true,
         ),
     ];
   }

@@ -26,6 +26,7 @@ class _ProgramScreenState extends State<ProgramScreen> {
   late final PageController _page;
   var _loading = false;
   String? _loadError;
+  String? _hello;
   late int _index;
   PageController? _travel;
   int? _travelFrom;
@@ -41,9 +42,18 @@ class _ProgramScreenState extends State<ProgramScreen> {
       _days = [for (var i = 0; i < 7; i++) DayPlan(quests: [])];
       _loading = true;
       _loadLive();
+      _loadHello();
     } else {
       _days = DemoWeek.build();
+      _hello = DemoAccount.firstName;
     }
+  }
+
+  Future<void> _loadHello() async {
+    final profile = await SiteSession.instance.profile();
+    if (!mounted) return;
+    final name = profile?.firstName ?? '';
+    setState(() => _hello = name.isEmpty ? 'Öğrenci' : name);
   }
 
   Future<void> _loadLive() async {
@@ -57,9 +67,22 @@ class _ProgramScreenState extends State<ProgramScreen> {
       });
     } catch (error) {
       if (!mounted) return;
+      final message = error is SiteException ? error.message : 'Program alınamadı.';
+      if (message.startsWith('Oturum kapanmış')) {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.remove(DemoAccount.sessionKey);
+        await prefs.remove(SiteSession.liveKey);
+        await SiteSession.instance.clear();
+        if (!mounted) return;
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute<void>(builder: (_) => const LoginScreen()),
+          (_) => false,
+        );
+        return;
+      }
       setState(() {
         _loading = false;
-        _loadError = error is SiteException ? error.message : 'Program alınamadı.';
+        _loadError = message;
       });
     }
   }
@@ -154,7 +177,7 @@ class _ProgramScreenState extends State<ProgramScreen> {
                   TextButton(
                     onPressed: () {
                       Navigator.of(context).push(
-                        MaterialPageRoute<void>(builder: (_) => const AccountScreen()),
+                        MaterialPageRoute<void>(builder: (_) => AccountScreen(live: widget.live)),
                       );
                     },
                     style: TextButton.styleFrom(
@@ -176,9 +199,11 @@ class _ProgramScreenState extends State<ProgramScreen> {
                 ],
               ),
             ),
-            const Padding(
-              padding: EdgeInsets.fromLTRB(20, 14, 20, 0),
-              child: WelcomeLine(name: DemoAccount.firstName),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 14, 20, 0),
+              child: _hello == null
+                  ? const SizedBox(height: 28)
+                  : WelcomeLine(key: ValueKey(_hello), name: _hello!),
             ),
             const SizedBox(height: 12),
             SizedBox(

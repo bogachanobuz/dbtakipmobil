@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../data/site_session.dart';
 import '../../demo/demo_week.dart';
 import '../../theme/db_theme.dart';
+import '../../widgets/video_showcase.dart';
 
 class ReportsScreen extends StatefulWidget {
   const ReportsScreen({super.key, this.live = false});
@@ -81,14 +82,41 @@ class _ReportsScreenState extends State<ReportsScreen> {
   }
 }
 
-class _ReportBody extends StatelessWidget {
+class _ReportBody extends StatefulWidget {
   const _ReportBody({required this.board});
 
   final ReportBoard board;
 
   @override
+  State<_ReportBody> createState() => _ReportBodyState();
+}
+
+class _ReportBodyState extends State<_ReportBody> {
+  final _search = TextEditingController();
+
+  ReportBoard get board => widget.board;
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  int _count(ReportLesson lesson) => lesson.topics.isEmpty ? lesson.videos.length : lesson.total;
+
+  int _finished(ReportLesson lesson) =>
+      lesson.topics.isEmpty ? lesson.videos.where((video) => video.done).length : lesson.done;
+
+  @override
   Widget build(BuildContext context) {
-    final percent = board.total == 0 ? 0 : (board.done * 100 / board.total).round();
+    final query = _search.text.trim().toLowerCase();
+    final lessons = board.lessons.where((lesson) {
+      if (query.isEmpty) return true;
+      return lesson.name.toLowerCase().contains(query);
+    }).toList();
+    final total = lessons.fold<int>(0, (sum, lesson) => sum + _count(lesson));
+    final done = lessons.fold<int>(0, (sum, lesson) => sum + _finished(lesson));
+    final percent = total == 0 ? 0 : (done * 100 / total).round();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -101,7 +129,7 @@ class _ReportBody extends StatelessWidget {
                   children: [
                     Text('Ders raporları', style: DbText.style(size: 14, weight: FontWeight.w800, color: DbColors.muted)),
                     const SizedBox(height: 4),
-                    Text('${board.done} / ${board.total} görev', style: DbText.style(size: 26, weight: FontWeight.w900)),
+                    Text('$done / $total görev', style: DbText.style(size: 26, weight: FontWeight.w900)),
                   ],
                 ),
               ),
@@ -110,12 +138,29 @@ class _ReportBody extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 18),
+        TextField(
+          controller: _search,
+          onChanged: (_) => setState(() {}),
+          style: DbText.style(size: 15, weight: FontWeight.w700),
+          cursorColor: DbColors.navy,
+          decoration: InputDecoration(
+            hintText: 'Ders ara',
+            hintStyle: DbText.style(size: 15, weight: FontWeight.w700, color: const Color(0xFF9AA3B2)),
+            prefixIcon: const Icon(Icons.search_rounded, color: DbColors.navy),
+            filled: true,
+            fillColor: Colors.white,
+            isDense: true,
+            contentPadding: const EdgeInsets.symmetric(vertical: 12),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none),
+          ),
+        ),
+        const SizedBox(height: 14),
         Text('Dersler', style: DbText.style(size: 18, weight: FontWeight.w900)),
         const SizedBox(height: 10),
-        if (board.lessons.isEmpty)
+        if (lessons.isEmpty)
           Text('Henüz görev kaydı yok.', style: DbText.style(size: 15, weight: FontWeight.w700, color: DbColors.muted))
         else
-          for (final lesson in board.lessons) ...[
+          for (final lesson in lessons) ...[
             Material(
               color: Colors.white,
               borderRadius: BorderRadius.circular(18),
@@ -146,14 +191,18 @@ class _ReportBody extends StatelessWidget {
                             Text(lesson.name, style: DbText.style(size: 17, weight: FontWeight.w900)),
                             const SizedBox(height: 2),
                             Text(
-                              'Detaylı performans raporu',
+                              lesson.topics.isEmpty
+                                  ? '${lesson.videos.length} video'
+                                  : lesson.videos.isEmpty
+                                      ? 'Detaylı performans raporu'
+                                      : '${lesson.total} konu · ${lesson.videos.length} video',
                               style: DbText.style(size: 13, weight: FontWeight.w700, color: DbColors.muted),
                             ),
                             const SizedBox(height: 8),
                             ClipRRect(
                               borderRadius: BorderRadius.circular(8),
                               child: LinearProgressIndicator(
-                                value: lesson.total == 0 ? 0 : lesson.done / lesson.total,
+                                value: _count(lesson) == 0 ? 0 : _finished(lesson) / _count(lesson),
                                 minHeight: 6,
                                 backgroundColor: DbColors.mist,
                                 color: lesson.color,
@@ -167,7 +216,7 @@ class _ReportBody extends StatelessWidget {
                         const Icon(Icons.check_circle_rounded, color: DbColors.navy)
                       else
                         Text(
-                          '${lesson.done}/${lesson.total}',
+                          lesson.topics.isEmpty ? '${lesson.videos.length} video' : '${lesson.done}/${lesson.total}',
                           style: DbText.style(size: 14, weight: FontWeight.w800, color: DbColors.muted),
                         ),
                     ],
@@ -182,30 +231,161 @@ class _ReportBody extends StatelessWidget {
   }
 }
 
-class _LessonReportPage extends StatelessWidget {
+class _LessonReportPage extends StatefulWidget {
   const _LessonReportPage({required this.lesson});
 
   final ReportLesson lesson;
 
   @override
+  State<_LessonReportPage> createState() => _LessonReportPageState();
+}
+
+class _LessonReportPageState extends State<_LessonReportPage> {
+  final _topicSearch = TextEditingController();
+  final _videoSearch = TextEditingController();
+  var _source = 0;
+  var _videoLimit = 20;
+
+  @override
+  void dispose() {
+    _topicSearch.dispose();
+    _videoSearch.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final pending = lesson.topics.where((topic) => !topic.done).toList();
-    final done = lesson.topics.where((topic) => topic.done).toList();
+    final lesson = widget.lesson;
+    final topicQuery = _topicSearch.text.trim().toLowerCase();
+    final videoQuery = _videoSearch.text.trim().toLowerCase();
+    final topics = lesson.topics.where((topic) {
+      if (topicQuery.isEmpty) return true;
+      return topic.name.toLowerCase().contains(topicQuery);
+    }).toList();
+    final sources = lesson.videos.map((video) => video.source).toSet().toList()..sort();
+    final selected = sources.length > 1 ? (sources.contains(_source) ? _source : sources.first) : null;
+    final videos = lesson.videos.where((video) {
+      if (selected != null && video.source != selected) return false;
+      if (videoQuery.isEmpty) return true;
+      final label = '${video.subject} ${video.title}'.toLowerCase();
+      return label.contains(videoQuery);
+    }).toList();
+    final pending = topics.where((topic) => !topic.done).toList();
+    final done = topics.where((topic) => topic.done).toList();
     return _Hub(
       title: lesson.name,
       lead: '${lesson.done} bitti · ${lesson.total - lesson.done} kaldı',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          _searchBox(_topicSearch, 'Konu ara'),
+          const SizedBox(height: 14),
           if (pending.isNotEmpty) ...[
-            const _SectionLabel('Bekleyen'),
+            const _SectionLabel('Konular'),
             for (final topic in pending) _topic(topic),
           ],
           if (done.isNotEmpty) ...[
-            const _SectionLabel('Tamamlanan'),
+            const _SectionLabel('Tamamlanan konular'),
             for (final topic in done) _topic(topic),
           ],
+          if (topics.isEmpty)
+            Text('Bu aramada konu yok.', style: DbText.style(size: 14, weight: FontWeight.w700, color: DbColors.muted)),
+          if (lesson.videos.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            const _SectionLabel('Video sırası'),
+            _searchBox(_videoSearch, 'Video ara'),
+            if (sources.length > 1) ...[
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final source in sources)
+                    _sourceChip(source, source == selected),
+                ],
+              ),
+            ],
+            if (_sourceName(videos, selected).isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Text(
+                _sourceName(videos, selected),
+                style: DbText.style(size: 20, weight: FontWeight.w900),
+              ),
+            ],
+            const SizedBox(height: 10),
+            VideoShowcase(
+              actions: false,
+              videos: [
+                for (final video in videos.take(_videoLimit))
+                  VideoTileData(
+                    subject: video.subject,
+                    lesson: lesson.name,
+                    title: video.title,
+                    url: video.url,
+                    order: video.order,
+                    teacher: video.teacher,
+                    done: video.done,
+                  ),
+              ],
+            ),
+            if (videos.length > _videoLimit)
+              TextButton(
+                onPressed: () => setState(() => _videoLimit += 20),
+                child: Text(
+                  'Daha fazla (${videos.length - _videoLimit})',
+                  style: DbText.style(size: 14, weight: FontWeight.w800, color: DbColors.navy),
+                ),
+              ),
+          ],
         ],
+      ),
+    );
+  }
+
+  String _sourceName(List<ReportVideo> videos, int? selected) {
+    for (final video in videos) {
+      final name = video.sourceName;
+      if (name != null && name.isNotEmpty) return name;
+    }
+    if (selected == null) return '';
+    return '$selected. kaynak';
+  }
+
+  Widget _searchBox(TextEditingController controller, String hint) {
+    return TextField(
+      controller: controller,
+      onChanged: (_) => setState(() => _videoLimit = 20),
+      style: DbText.style(size: 15, weight: FontWeight.w700),
+      cursorColor: DbColors.navy,
+      decoration: InputDecoration(
+        hintText: hint,
+        hintStyle: DbText.style(size: 15, weight: FontWeight.w700, color: const Color(0xFF9AA3B2)),
+        prefixIcon: const Icon(Icons.search_rounded, color: DbColors.navy),
+        filled: true,
+        fillColor: Colors.white,
+        isDense: true,
+        contentPadding: const EdgeInsets.symmetric(vertical: 12),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none),
+      ),
+    );
+  }
+
+  Widget _sourceChip(int source, bool selected) {
+    return GestureDetector(
+      onTap: () => setState(() {
+        _source = source;
+        _videoLimit = 20;
+      }),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        decoration: BoxDecoration(
+          color: selected ? DbColors.navy : Colors.white,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Text(
+          '$source. kaynak',
+          style: DbText.style(size: 13, weight: FontWeight.w800, color: selected ? Colors.white : DbColors.ink),
+        ),
       ),
     );
   }
